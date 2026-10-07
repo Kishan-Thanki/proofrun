@@ -47,8 +47,24 @@ class StateManager:
         self,
         scenario_name: str,
         passed: bool,
+        failure_threshold: int = 1,
+        recovery_threshold: int = 1,
     ) -> StateTransition:
-        """Update scenario state and return the resulting transition."""
+        """Update scenario state and return the resulting transition.
+
+        ``pass_count`` and ``fail_count`` are consecutive counters: a result of
+        the opposite kind resets the other counter.
+
+        Args:
+            scenario_name: Scenario whose result is being recorded.
+            passed: Whether the run passed (after any retries).
+            failure_threshold: Consecutive failed runs needed to move to
+                ``FAILING``. Until then a ``HEALTHY`` or ``UNKNOWN`` scenario
+                keeps its status.
+            recovery_threshold: Consecutive passing runs needed to move from
+                ``FAILING`` back to ``HEALTHY``. A scenario that is not
+                ``FAILING`` becomes ``HEALTHY`` on its first pass.
+        """
         if scenario_name not in self.states:
             self.states[scenario_name] = ScenarioState()
 
@@ -56,13 +72,17 @@ class StateManager:
         old_status = state.status
 
         if passed:
-            state.status = Status.HEALTHY
             state.pass_count += 1
             state.fail_count = 0
+
+            if state.status != Status.FAILING or state.pass_count >= recovery_threshold:
+                state.status = Status.HEALTHY
         else:
-            state.status = Status.FAILING
             state.fail_count += 1
             state.pass_count = 0
+
+            if state.fail_count >= failure_threshold:
+                state.status = Status.FAILING
 
         return StateTransition(
             scenario_name=scenario_name,
