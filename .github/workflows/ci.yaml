@@ -46,12 +46,8 @@ jobs:
       - name: Run code quality & coverage checks
         run: make check
 
-      - name: Run integration scenarios
-        run: |
-          make run-profile
-          make run-auth
-          make run-chain
-          make run-crud
+      - name: Run integration scenarios (local demo API, no network)
+        run: make integration
 
   build:
     name: Build Package
@@ -84,3 +80,22 @@ jobs:
           ls -lh dist/
           test -f dist/*.whl
           test -f dist/*.tar.gz
+
+  docker:
+    name: Docker Image
+    runs-on: ubuntu-latest
+    needs: quality
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build --tag proofrun:ci .
+
+      - name: Smoke test image
+        run: |
+          docker run --rm proofrun:ci --version
+          docker run --rm -v "$PWD/scenarios:/monitors:ro" \
+            -e DEMO_PASSWORD=demo-password \
+            proofrun:ci /monitors/resilient.yaml --validate
