@@ -38,6 +38,7 @@ class ScenarioResult:
     passed: bool
     total_latency_ms: float
     step_results: list[StepResult] = field(default_factory=list)
+    attempts: int = 1
 
 
 class ScenarioRunner:
