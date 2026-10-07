@@ -1,0 +1,13 @@
+.git
+.github
+.venv
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+dist
+**/__pycache__
+tests
+docs
+deploy
+FUTURE.md

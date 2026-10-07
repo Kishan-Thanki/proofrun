@@ -1,5 +1,7 @@
+PYTHON ?= python3
+
 .PHONY: install test coverage coverage-html lint format format-check typecheck check \
-	run-profile run-auth run-chain run-crud build clean full ci
+	serve integration build clean full
 
 full: clean install check build
 
@@ -34,23 +36,32 @@ typecheck:
 
 check: lint format-check typecheck coverage
 
-run-profile:
-	uv run proofrun scenarios/profile.yaml --once
+serve:
+	$(PYTHON) scenarios/server.py
 
-run-auth:
-	python scenarios/server.py & \
+integration:
+	@$(PYTHON) scenarios/server.py & \
 	SERVER_PID=$$!; \
-	sleep 1; \
-	uv run proofrun scenarios/auth.yaml --once; \
-	EXIT_CODE=$$?; \
-	kill $$SERVER_PID 2>/dev/null || true; \
-	exit $$EXIT_CODE
-
-run-chain:
-	uv run proofrun scenarios/chain.yaml --once
-
-run-crud:
-	uv run proofrun scenarios/crud.yaml --once
+	trap 'kill $$SERVER_PID 2>/dev/null || true' EXIT; \
+	up=0; \
+	for i in $$(seq 1 50); do \
+		$(PYTHON) -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8099/health')" \
+			>/dev/null 2>&1 && up=1 && break; \
+		sleep 0.2; \
+	done; \
+	if [ $$up -ne 1 ]; then \
+		echo "The demo API did not start on 127.0.0.1:8099. Is '$(PYTHON)' installed and the port free?"; \
+		echo "Try: make integration PYTHON=/path/to/python3"; \
+		exit 1; \
+	fi; \
+	export DEMO_PASSWORD=demo-password; \
+	status=0; \
+	for name in profile auth chain crud resilient; do \
+		echo "==> scenarios/$$name.yaml"; \
+		uv run proofrun scenarios/$$name.yaml --validate >/dev/null || status=1; \
+		uv run proofrun scenarios/$$name.yaml || status=1; \
+	done; \
+	exit $$status
 
 build:
 	uv build
