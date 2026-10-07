@@ -1,10 +1,12 @@
 """AOT Schema Compiler for Proofrun scenario configurations.
 
-This module loads YAML configuration, validates it using Pydantic, resolves
-global defaults, and pre-compiles JSON schemas into executable validators.
+This module loads YAML configuration, resolves ``${env.NAME}`` references,
+validates it using Pydantic, applies global defaults, and pre-compiles JSON
+schemas into executable validators.
 """
 
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
@@ -14,10 +16,38 @@ import yaml
 from pydantic import ValidationError
 
 from proofrun.core.config import GlobalConfig, ProofrunConfig
+from proofrun.core.envvars import EnvVarError, resolve_env_references
+
+_INHERITED_SCENARIO_FIELDS = (
+    "interval_seconds",
+    "retries",
+    "retry_delay_seconds",
+    "failure_threshold",
+    "recovery_threshold",
+)
 
 
 class ConfigCompilerError(Exception):
     """Raised when configuration loading or compilation fails."""
+
+
+def _format_validation_error(err: ValidationError) -> str:
+    """Describe validation problems without echoing the offending input.
+
+    Environment references are resolved before validation, so the input of a
+    failing field could be a secret. Only the location and the message are shown.
+    """
+    lines = [
+        f"  {'.'.join(str(part) for part in problem['loc']) or '<root>'}: "
+        f"{problem['msg']}"
+        for problem in err.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        )
+    ]
+
+    return "Config validation failed:\n" + "\n".join(lines)
 
 
 def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
@@ -54,9 +84,25 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
         )
 
     try:
+        raw_data = resolve_env_references(raw_data, os.environ)
+    except EnvVarError as err:
+        raise ConfigCompilerError(f"Invalid configuration in {path}: {err}") from err
+
+    try:
         config = ProofrunConfig.model_validate(raw_data)
     except ValidationError as err:
-        raise ConfigCompilerError(f"Config validation failed:\n{err}") from err
+        raise ConfigCompilerError(_format_validation_error(err)) from err
+
+    seen_names: set[str] = set()
+
+    for scenario in config.scenarios:
+        if scenario.name in seen_names:
+            raise ConfigCompilerError(
+                f"Duplicate scenario name '{scenario.name}'. "
+                "Scenario names must be unique."
+            )
+
+        seen_names.add(scenario.name)
 
     global_config = config.global_config or GlobalConfig()
 
@@ -65,6 +111,10 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
     global_headers = global_config.headers
 
     for scenario in config.scenarios:
+        for field_name in _INHERITED_SCENARIO_FIELDS:
+            if field_name not in scenario.model_fields_set:
+                setattr(scenario, field_name, getattr(global_config, field_name))
+
         if scenario.base_url is None:
             if global_base_url is None:
                 raise ConfigCompilerError(
@@ -75,6 +125,14 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
             scenario.base_url = global_base_url
 
         for step in scenario.steps:
+            for variable_name in step.extract:
+                if variable_name.startswith("env."):
+                    raise ConfigCompilerError(
+                        f"Invalid extract variable '{variable_name}' in scenario "
+                        f"'{scenario.name}', step '{step.name}': names starting "
+                        "with 'env.' are reserved for environment references."
+                    )
+
             if step.request.timeout is None:
                 step.request.timeout = global_timeout
 
