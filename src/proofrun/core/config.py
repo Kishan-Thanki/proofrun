@@ -29,6 +29,35 @@ class GlobalConfig(BaseModel):
         default_factory=dict,
         description="Default HTTP headers sent with all requests.",
     )
+    interval_seconds: int = Field(
+        default=60,
+        gt=0,
+        description="Default execution interval in seconds for daemon mode.",
+    )
+    retries: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description="Default number of extra attempts after a failed scenario run.",
+    )
+    retry_delay_seconds: float = Field(
+        default=1.0,
+        ge=0,
+        le=300,
+        description="Default delay in seconds between attempts of a scenario.",
+    )
+    failure_threshold: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description="Default consecutive failed runs before a scenario is FAILING.",
+    )
+    recovery_threshold: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description="Default consecutive passing runs before a scenario recovers.",
+    )
 
 
 class RequestConfig(BaseModel):
@@ -125,6 +154,30 @@ class ScenarioConfig(BaseModel):
         default=60,
         gt=0,
         description="Execution interval in seconds for daemon mode.",
+    )
+    retries: int = Field(
+        default=0,
+        ge=0,
+        le=10,
+        description="Extra attempts after a failed run; the whole scenario is re-run.",
+    )
+    retry_delay_seconds: float = Field(
+        default=1.0,
+        ge=0,
+        le=300,
+        description="Delay in seconds between attempts of this scenario.",
+    )
+    failure_threshold: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description="Consecutive failed runs before the scenario becomes FAILING.",
+    )
+    recovery_threshold: int = Field(
+        default=1,
+        ge=1,
+        le=1000,
+        description="Consecutive passing runs before a FAILING scenario recovers.",
     )
     steps: list[StepConfig] = Field(
         ...,
