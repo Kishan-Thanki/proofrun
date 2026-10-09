@@ -3,7 +3,7 @@
 Allows the package to be executed via `python -m proofrun`.
 """
 
-from proofrun.cli import main
+from proofrun.cli.commands import main
 
 if __name__ == "__main__":
     main()
