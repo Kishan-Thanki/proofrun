@@ -9,7 +9,7 @@ description = "Synthetic API monitoring as code daemon."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-keywords = ["api", "monitoring", "synthetic-monitoring", "yaml", "http", "devops", "prometheus"]
+keywords = ["api", "monitoring", "synthetic-monitoring", "yaml", "http", "devops"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: Console",

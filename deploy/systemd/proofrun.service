@@ -1,0 +1,57 @@
+# Proofrun as a systemd service.
+#
+# Install:
+#   sudo useradd --system --no-create-home --shell /usr/sbin/nologin proofrun
+#   sudo python3 -m venv /opt/proofrun
+#   sudo /opt/proofrun/bin/pip install proofrun
+#   sudo install -d /etc/proofrun
+#   sudo cp monitors.yaml /etc/proofrun/monitors.yaml
+#   sudo install -m 600 proofrun.env.example /etc/proofrun/proofrun.env
+#   sudo cp proofrun.service /etc/systemd/system/proofrun.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now proofrun
+#
+# Logs:   journalctl -u proofrun -f
+# Check:  /opt/proofrun/bin/proofrun /etc/proofrun/monitors.yaml --validate
+#
+# Edits to monitors.yaml are picked up while the service runs. Changes to the
+# environment file need: sudo systemctl restart proofrun
+
+[Unit]
+Description=Proofrun synthetic API monitor
+Documentation=https://github.com/Kishan-Thanki/proofrun
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=proofrun
+Group=proofrun
+
+# Read as root before privileges are dropped, so it can stay root-owned (0600).
+EnvironmentFile=/etc/proofrun/proofrun.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/proofrun/bin/proofrun /etc/proofrun/monitors.yaml --daemon
+
+Restart=on-failure
+RestartSec=5
+
+# Hardening: Proofrun only needs outbound HTTP and read access to its config.
+# AF_UNIX stays allowed: Python's event loop and name resolution use local sockets.
+# After installing, review the result with: systemd-analyze security proofrun
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

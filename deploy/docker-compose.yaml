@@ -1,0 +1,31 @@
+# Proofrun with Docker Compose.
+#   mkdir monitors && cp your-config.yaml monitors/api.yaml
+#   echo 'API_TOKEN=...' > .env
+#   docker compose up -d
+services:
+  proofrun:
+    image: ghcr.io/kishan-thanki/proofrun:latest
+    command: ["/monitors/api.yaml", "--daemon"]
+    restart: unless-stopped
+    volumes:
+      - ./monitors:/monitors:ro
+    environment:
+      API_TOKEN: ${API_TOKEN}
+      PROOFRUN_WEBHOOK_URL: ${PROOFRUN_WEBHOOK_URL:-}
+      PROOFRUN_METRICS_PORT: "9464"
+      PROOFRUN_METRICS_HOST: "0.0.0.0"
+    ports:
+      - "127.0.0.1:9464:9464"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9464/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
