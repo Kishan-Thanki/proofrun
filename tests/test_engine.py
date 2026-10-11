@@ -8,14 +8,14 @@ import httpx
 import pytest
 from pydantic import HttpUrl
 
-from proofrun.core.config import (
+from proofrun.config.models import (
     ExpectConfig,
     RequestConfig,
     ScenarioConfig,
     StepConfig,
 )
-from proofrun.core.context import ExecutionContext
-from proofrun.core.engine import ScenarioRunner
+from proofrun.runner.context import ExecutionContext
+from proofrun.runner.engine import ScenarioRunner
 
 
 def build_runner(steps: list[StepConfig]) -> ScenarioRunner:

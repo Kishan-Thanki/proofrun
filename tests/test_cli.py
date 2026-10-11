@@ -1,664 +1,432 @@
-"""Unit tests for Proofrun CLI interface."""
+"""Unit tests for the Proofrun CLI interface."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-import threading
-from collections.abc import Iterator
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
+import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock, patch
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
 from typer.testing import CliRunner
 
-from proofrun.cli import app, execute_config, render_scenario_result
-from proofrun.core.config import ProofrunConfig
-from proofrun.core.engine import ScenarioResult, StepResult
-from proofrun.core.state import StateManager, Status
+from proofrun.cli.commands import _load_uvloop, app, new_client, run_event_loop
+from proofrun.cli.render import (
+    print_config_error,
+    print_internal_error,
+    render_scenario_result,
+)
+from proofrun.metrics.registry import MetricsRegistry
+from proofrun.monitor.daemon import Daemon
+from proofrun.notify.webhook import WebhookNotifier
+from proofrun.runner.engine import ScenarioResult, StepResult
 
 runner = CliRunner()
 
 
-class _LocalAPIHandler(BaseHTTPRequestHandler):
-    """Tiny deterministic API so CLI tests never touch the internet."""
+def write_config(
+    tmp_path: Path,
+    base_url: str,
+    status: int = 200,
+    path: str = "/posts/1",
+    extra: str = "",
+) -> Path:
+    config_file = tmp_path / "scenario.yaml"
+    config_file.write_text(
+        f"""
+version: "1.0"
 
-    def do_GET(self) -> None:  # noqa: N802
-        body = json.dumps({"id": 1, "title": "hello"}).encode()
+global:
+  base_url: "{base_url}"
 
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-        """Silence request logging."""
-
-
-@pytest.fixture
-def local_api() -> Iterator[str]:
-    """Serve a local HTTP API on a free port and yield its base URL."""
-    server = ThreadingHTTPServer(
-        ("127.0.0.1", 0),
-        _LocalAPIHandler,
+scenarios:
+  - name: "CLI Scenario"{extra}
+    steps:
+      - name: "Step"
+        request:
+          method: "GET"
+          path: "{path}"
+        expect:
+          status: {status}
+""",
+        encoding="utf-8",
     )
-    thread = threading.Thread(
-        target=server.serve_forever,
-        daemon=True,
-    )
-    thread.start()
 
-    try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
+    return config_file
+
+
+def free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+class FakeDaemon:
+    """Stands in for Daemon: records its arguments and is interrupted at once."""
+
+    instances: list[FakeDaemon] = []
+
+    def __init__(self, provider: Any, state: Any, client_factory: Any, **kwargs: Any):
+        self.provider = provider
+        self.client_factory = client_factory
+        self.kwargs = kwargs
+        self.instances.append(self)
+
+    async def run(self, stop: asyncio.Event | None = None) -> None:
+        raise KeyboardInterrupt
+
+
+@pytest.fixture(autouse=True)
+def _reset_fake_daemon() -> None:
+    FakeDaemon.instances = []
+
+
+class StoppingDaemon(Daemon):
+    """A real Daemon that stops after its first finished scenario run."""
+
+    async def run(self, stop: asyncio.Event | None = None) -> None:
+        stop_event = asyncio.Event()
+        original = self.on_result
+
+        def on_result(result: ScenarioResult) -> None:
+            if original is not None:
+                original(result)
+
+            stop_event.set()
+
+        self.on_result = on_result
+        self.max_tick = 0.01
+
+        await super().run(stop_event)
 
 
 def test_cli_version_flag() -> None:
-    """Verifies that --version prints the version string and exits cleanly."""
     result = runner.invoke(app, ["--version"])
 
     assert result.exit_code == 0
     assert "Proofrun version" in result.stdout
 
 
-def test_cli_run_successful_scenario(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    """Verifies successful scenario execution via CLI argument."""
-    yaml_content = f"""
-version: "1.0"
-
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "CLI Integration Scenario"
-    steps:
-      - name: "Dummy Step"
-        request:
-          method: "GET"
-          path: "/posts/1"
-        expect:
-          status: 200
-"""
-
-    config_file = tmp_path / "test_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
-    )
-
-    result = runner.invoke(
-        app,
-        [str(config_file)],
-    )
+def test_cli_run_successful_scenario(tmp_path: Path, local_api: str) -> None:
+    result = runner.invoke(app, [str(write_config(tmp_path, local_api))])
 
     assert result.exit_code == 0
-    assert "CLI Integration Scenario" in result.stdout
+    assert "CLI Scenario" in result.stdout
     assert "PASSED" in result.stdout
+    assert "Attempts" not in result.stdout
 
 
-def test_cli_run_failing_scenario(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    """Verifies single-run mode returns exit code 1 when assertions fail."""
-    yaml_content = f"""
-version: "1.0"
-
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "Failing Scenario"
-    steps:
-      - name: "Expect 404 on valid post"
-        request:
-          method: "GET"
-          path: "/posts/1"
-        expect:
-          status: 404
-"""
-
-    config_file = tmp_path / "failing_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
-    )
-
-    result = runner.invoke(
-        app,
-        [str(config_file)],
-    )
+def test_cli_run_failing_scenario(tmp_path: Path, local_api: str) -> None:
+    result = runner.invoke(app, [str(write_config(tmp_path, local_api, status=404))])
 
     assert result.exit_code == 1
-    assert "Failing Scenario" in result.stdout
     assert "FAILED" in result.stdout
 
 
 def test_cli_run_nonexistent_file() -> None:
-    """Verifies CLI raises an error when target YAML file does not exist."""
-    result = runner.invoke(
-        app,
-        ["non_existent_file.yaml"],
-    )
+    result = runner.invoke(app, ["non_existent_file.yaml"])
 
     assert result.exit_code != 0
 
 
-def test_cli_run_daemon_mode(
+def test_cli_reports_retry_attempts(tmp_path: Path, local_api: str) -> None:
+    config = write_config(
+        tmp_path,
+        local_api,
+        path="/fail",
+        extra="\n    retries: 2\n    retry_delay_seconds: 0",
+    )
+
+    result = runner.invoke(app, [str(config)])
+
+    assert result.exit_code == 1
+    assert "Attempts" in result.stdout
+    assert "3" in result.stdout
+
+
+def test_cli_once_mode_reports_invalid_configuration(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
+
+    result = runner.invoke(app, [str(config_file)])
+
+    assert result.exit_code == 1
+    assert "Configuration Error" in result.stdout
+
+
+def test_cli_resolves_env_references(tmp_path: Path, local_api: str) -> None:
+    config = write_config(tmp_path, "${env.TARGET}")
+
+    result = runner.invoke(app, [str(config)], env={"TARGET": local_api})
+
+    assert result.exit_code == 0
+    assert "PASSED" in result.stdout
+
+
+def test_cli_missing_env_variable_is_a_configuration_error(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "${env.PROOFRUN_TEST_MISSING}")
+
+    result = runner.invoke(app, [str(config)], env={"PROOFRUN_TEST_MISSING": None})
+
+    assert result.exit_code == 1
+    assert "PROOFRUN_TEST_MISSING" in result.stdout.replace("\n", "")
+
+
+def test_cli_validate_accepts_a_valid_configuration(tmp_path: Path) -> None:
+    config = write_config(
+        tmp_path,
+        "http://127.0.0.1:9",
+        extra="\n    retries: 2\n    failure_threshold: 3",
+    )
+
+    result = runner.invoke(app, [str(config), "--validate"])
+
+    assert result.exit_code == 0
+    assert "Configuration is valid" in result.stdout
+    assert "1 scenario(s), 1 step(s)" in result.stdout
+    assert "No requests were sent" in result.stdout
+    assert "PASSED" not in result.stdout
+
+
+def test_cli_validate_rejects_an_invalid_configuration(tmp_path: Path) -> None:
+    config_file = tmp_path / "bad.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
+
+    result = runner.invoke(app, [str(config_file), "--validate"])
+
+    assert result.exit_code == 1
+    assert "Configuration Error" in result.stdout
+
+
+def test_cli_validate_cannot_be_combined_with_daemon(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    result = runner.invoke(app, [str(config), "--validate", "--daemon"])
+
+    assert result.exit_code == 2
+
+
+def test_cli_once_mode_warns_about_daemon_only_options(
     tmp_path: Path,
     local_api: str,
 ) -> None:
-    """Verifies daemon loop execution and graceful KeyboardInterrupt exit."""
-    yaml_content = f"""
-version: "1.0"
+    config = write_config(tmp_path, local_api)
 
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "Daemon Test Scenario"
-    interval_seconds: 15
-    steps:
-      - name: "Health check"
-        request:
-          method: "GET"
-          path: "/posts/1"
-        expect:
-          status: 200
-"""
-
-    config_file = tmp_path / "daemon_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
+    result = runner.invoke(
+        app,
+        [
+            str(config),
+            "--webhook-url",
+            "https://hooks.example.com/x",
+            "--metrics-port",
+            "9464",
+        ],
     )
 
-    async def mock_sleep(seconds: float) -> None:
-        raise KeyboardInterrupt
+    assert result.exit_code == 0
+    assert "--webhook-url is ignored" in result.stdout
+    assert "--metrics-port is ignored" in result.stdout
 
-    with (
-        patch(
-            "proofrun.cli.asyncio.sleep",
-            side_effect=mock_sleep,
-        ),
-        patch(
-            "proofrun.cli.random.uniform",
-            return_value=1.0,
-        ),
-    ):
-        result = runner.invoke(
-            app,
-            [str(config_file), "--daemon"],
-        )
+
+def test_cli_daemon_mode_wiring_and_interrupt(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        result = runner.invoke(app, [str(config), "--daemon", "-i", "5"])
+
+    kwargs = FakeDaemon.instances[0].kwargs
 
     assert result.exit_code == 0
     assert "Starting daemon mode..." in result.stdout
-    assert "Sleeping for 15.0s (incl. jitter)" in result.stdout
     assert "Daemon execution stopped by user." in result.stdout
+    assert kwargs["interval_override"] == 5
+    assert kwargs["notifier"] is None
+    assert kwargs["metrics"] is None
+    assert FakeDaemon.instances[0].client_factory is new_client
 
 
-def test_cli_run_daemon_mode_interval_override(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    """Verifies daemon mode respects the --interval CLI override."""
-    yaml_content = f"""
-version: "1.0"
+def test_cli_daemon_without_interval_does_not_override(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-global:
-  base_url: "{local_api}"
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        runner.invoke(app, [str(config), "--daemon"])
 
-scenarios:
-  - name: "Interval Override Scenario"
-    interval_seconds: 60
-    steps:
-      - name: "Ping Step"
-        request:
-          method: "GET"
-          path: "/posts/1"
-        expect:
-          status: 200
-"""
+    assert FakeDaemon.instances[0].kwargs["interval_override"] is None
 
-    config_file = tmp_path / "override_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
-    )
 
-    slept_durations: list[float] = []
+def test_webhook_url_is_read_from_proofrun_env_var(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    async def mock_sleep(seconds: float) -> None:
-        slept_durations.append(seconds)
-        raise KeyboardInterrupt
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        runner.invoke(
+            app,
+            [str(config), "--daemon"],
+            env={"PROOFRUN_WEBHOOK_URL": "https://hooks.example.com/env"},
+        )
 
-    with (
-        patch(
-            "proofrun.cli.asyncio.sleep",
-            side_effect=mock_sleep,
-        ),
-        patch(
-            "proofrun.cli.random.uniform",
-            return_value=1.0,
-        ),
-    ):
+    notifier = FakeDaemon.instances[0].kwargs["notifier"]
+
+    assert isinstance(notifier, WebhookNotifier)
+    assert notifier.webhook_url == "https://hooks.example.com/env"
+
+
+def test_webhook_flag_overrides_env_var(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        runner.invoke(
+            app,
+            [
+                str(config),
+                "--daemon",
+                "--webhook-url",
+                "https://hooks.example.com/flag",
+            ],
+            env={"PROOFRUN_WEBHOOK_URL": "https://hooks.example.com/env"},
+        )
+
+    notifier = FakeDaemon.instances[0].kwargs["notifier"]
+
+    assert notifier.webhook_url == "https://hooks.example.com/flag"
+
+
+def test_old_proof_env_var_is_not_read(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        runner.invoke(
+            app,
+            [str(config), "--daemon"],
+            env={
+                "PROOF_WEBHOOK_URL": "https://hooks.example.com/old",
+                "PROOFRUN_WEBHOOK_URL": None,
+            },
+        )
+
+    assert FakeDaemon.instances[0].kwargs["notifier"] is None
+
+
+def test_cli_daemon_runs_real_scenarios(tmp_path: Path, local_api: str) -> None:
+    config = write_config(tmp_path, local_api)
+
+    with patch("proofrun.cli.commands.Daemon", StoppingDaemon):
+        result = runner.invoke(app, [str(config), "--daemon"])
+
+    assert result.exit_code == 0
+    assert "Starting daemon mode..." in result.stdout
+    assert "PASSED" in result.stdout
+
+
+def test_cli_daemon_serves_metrics(tmp_path: Path, local_api: str) -> None:
+    config = write_config(tmp_path, local_api)
+    port = free_port()
+
+    with patch("proofrun.cli.commands.Daemon", StoppingDaemon):
         result = runner.invoke(
             app,
-            [str(config_file), "--daemon", "-i", "5"],
+            [str(config), "--daemon", "--metrics-port", str(port)],
         )
 
     assert result.exit_code == 0
-    assert slept_durations[0] == pytest.approx(5.0)
-    assert "Sleeping for 5.0s (incl. jitter)" in result.stdout
+    assert f"http://127.0.0.1:{port}/metrics" in result.stdout
+    assert "reachable from the network" not in result.stdout
 
 
-def test_cli_daemon_mode_jitter(
+def test_cli_passes_a_registry_to_the_daemon_when_metrics_are_enabled(
     tmp_path: Path,
-    local_api: str,
 ) -> None:
-    """Verifies daemon mode applies the ±15% sleep jitter."""
-    yaml_content = f"""
-version: "1.0"
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "Jitter Test"
-    interval_seconds: 100
-    steps:
-      - name: "Ping"
-        request:
-          method: "GET"
-          path: "/posts/1"
-        expect:
-          status: 200
-"""
-
-    config_file = tmp_path / "jitter_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
-    )
-
-    slept_durations: list[float] = []
-
-    async def mock_sleep(seconds: float) -> None:
-        slept_durations.append(seconds)
-        raise KeyboardInterrupt
-
-    with (
-        patch(
-            "proofrun.cli.asyncio.sleep",
-            side_effect=mock_sleep,
-        ),
-        patch(
-            "proofrun.cli.random.uniform",
-            return_value=1.15,
-        ),
-    ):
-        result = runner.invoke(
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        runner.invoke(
             app,
-            [str(config_file), "--daemon"],
+            [str(config), "--daemon"],
+            env={"PROOFRUN_METRICS_PORT": str(free_port())},
         )
 
-    assert result.exit_code == 0
-    assert slept_durations[0] == pytest.approx(115.0)
+    assert isinstance(FakeDaemon.instances[0].kwargs["metrics"], MetricsRegistry)
 
 
-def test_cli_daemon_with_webhook_flag(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    """Verifies daemon mode dispatches a webhook on failure transition."""
-    yaml_content = f"""
-version: "1.0"
+def test_cli_warns_when_metrics_are_exposed(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "Webhook Scenario"
-    steps:
-      - name: "Ping"
-        request:
-          method: "GET"
-          path: "/"
-        expect:
-          status: 500
-"""
-
-    config_file = tmp_path / "webhook_scenario.yaml"
-    config_file.write_text(
-        yaml_content,
-        encoding="utf-8",
-    )
-
-    async def mock_sleep(seconds: float) -> None:
-        raise KeyboardInterrupt
-
-    with (
-        patch(
-            "proofrun.cli.WebhookNotifier.notify",
-            new_callable=AsyncMock,
-        ) as mock_notify,
-        patch(
-            "proofrun.cli.asyncio.sleep",
-            side_effect=mock_sleep,
-        ),
-    ):
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
         result = runner.invoke(
             app,
             [
-                str(config_file),
+                str(config),
                 "--daemon",
-                "--webhook-url",
-                "https://hooks.discord.com/123",
+                "--metrics-port",
+                str(free_port()),
+                "--metrics-host",
+                "0.0.0.0",
             ],
         )
 
-    assert result.exit_code == 0
-    assert mock_notify.call_count == 1
-
-    event = mock_notify.call_args.args[0]
-
-    assert event.scenario_name == "Webhook Scenario"
-    assert event.old_status == Status.UNKNOWN
-    assert event.new_status == Status.FAILING
-    assert "Ping" in event.details
+    assert "reachable from the network" in result.stdout
 
 
-def test_cli_invalid_config_in_daemon_mode(
-    tmp_path: Path,
-) -> None:
-    """Verifies daemon mode handles invalid configuration gracefully."""
-    config_file = tmp_path / "invalid.yaml"
+def test_cli_reports_a_metrics_port_that_is_in_use(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    config_file.write_text(
-        """
-version: "1.0"
+    with socket.socket() as blocker:
+        blocker.bind(("127.0.0.1", 0))
+        blocker.listen()
+        port = blocker.getsockname()[1]
 
-global:
-  base_url: "https://example.com"
-
-scenarios:
-  - name: "Invalid Scenario"
-    steps:
-      - invalid
-""",
-        encoding="utf-8",
-    )
-
-    async def mock_sleep(seconds: float) -> None:
-        raise KeyboardInterrupt
-
-    with patch(
-        "proofrun.cli.asyncio.sleep",
-        side_effect=mock_sleep,
-    ):
-        result = runner.invoke(
-            app,
-            [str(config_file), "--daemon"],
-        )
-
-    assert result.exit_code == 0
-    assert "Configuration Error" in result.stdout
-    assert "Sleeping for" in result.stdout
-    assert "Daemon execution stopped by user." in result.stdout
-
-
-def test_cli_daemon_uses_last_known_good_config(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    """Verifies daemon mode retains a previously valid configuration."""
-    config_file = tmp_path / "reload.yaml"
-
-    valid_yaml = f"""
-version: "1.0"
-
-global:
-  base_url: "{local_api}"
-
-scenarios:
-  - name: "Known Good Scenario"
-    interval_seconds: 10
-    steps:
-      - name: "Ping"
-        request:
-          method: "GET"
-          path: "/"
-        expect:
-          status: 200
-"""
-
-    config_file.write_text(
-        valid_yaml,
-        encoding="utf-8",
-    )
-
-    async def mock_sleep(seconds: float) -> None:
-        raise KeyboardInterrupt
-
-    with (
-        patch(
-            "proofrun.cli.asyncio.sleep",
-            side_effect=mock_sleep,
-        ),
-        patch(
-            "proofrun.cli.random.uniform",
-            return_value=1.0,
-        ),
-    ):
-        result = runner.invoke(
-            app,
-            [str(config_file), "--daemon"],
-        )
-
-    assert result.exit_code == 0
-    assert "Known Good Scenario" in result.stdout
-
-
-def test_execute_config_no_valid_config() -> None:
-    """Verifies execution fails when no valid configuration is available."""
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        None,
-        Exception("Invalid configuration"),
-    )
-
-    async def run_test() -> tuple[bool, int]:
-        async with httpx.AsyncClient() as client:
-            return await execute_config(
-                config_manager,
-                client,
+        with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+            result = runner.invoke(
+                app,
+                [str(config), "--daemon", "--metrics-port", str(port)],
             )
 
-    with patch("proofrun.cli.console.print") as mock_print:
-        result = asyncio.run(run_test())
-
-    assert result == (False, 60)
-    assert mock_print.call_count == 1
-    assert "Configuration Error" in mock_print.call_args.args[0]
+    assert result.exit_code == 1
+    assert "Cannot start the metrics server" in result.stdout
+    assert FakeDaemon.instances == []
 
 
-def test_execute_config_config_error_with_last_known_good() -> None:
-    """Verifies execution continues with the last known-good configuration."""
-    proofrun_config = ProofrunConfig.model_validate(
-        {
-            "version": "1.0",
-            "global": {
-                "base_url": "https://example.com",
-            },
-            "scenarios": [
-                {
-                    "name": "Known Good",
-                    "interval_seconds": 30,
-                    "steps": [
-                        {
-                            "name": "Ping",
-                            "request": {
-                                "method": "GET",
-                                "path": "/",
-                            },
-                            "expect": {
-                                "status": 200,
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-    )
+def test_cli_rejects_invalid_metrics_ports(tmp_path: Path) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        proofrun_config,
-        Exception("Reload failed"),
-    )
-
-    result = ScenarioResult(
-        scenario_name="Known Good",
-        passed=True,
-        step_results=[],
-        total_latency_ms=1.0,
-    )
-
-    with (
-        patch(
-            "proofrun.cli.ScenarioRunner.run",
-            new_callable=AsyncMock,
-            return_value=result,
-        ),
-        patch("proofrun.cli.render_scenario_result"),
-        patch("proofrun.cli.console.print") as mock_print,
-    ):
-
-        async def run_test() -> tuple[bool, int]:
-            async with httpx.AsyncClient() as client:
-                return await execute_config(
-                    config_manager,
-                    client,
-                )
-
-        actual = asyncio.run(run_test())
-
-    assert actual == (True, 30)
-    mock_print.assert_any_call("[yellow]Using last known-good configuration.[/yellow]")
+    assert runner.invoke(app, [str(config), "--metrics-port", "0"]).exit_code == 2
+    assert runner.invoke(app, [str(config), "--metrics-port", "70000"]).exit_code == 2
 
 
-def test_execute_config_empty_scenarios() -> None:
-    """Verifies execution returns the default interval for no scenarios."""
-    proofrun_config = ProofrunConfig.model_validate(
-        {
-            "version": "1.0",
-            "global": {
-                "base_url": "https://example.com",
-            },
-            "scenarios": [],
-        }
-    )
+def test_new_client_returns_a_fresh_client_each_time() -> None:
+    first = new_client()
+    second = new_client()
 
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        proofrun_config,
-        None,
-    )
-
-    async def run_test() -> tuple[bool, int]:
-        async with httpx.AsyncClient() as client:
-            return await execute_config(
-                config_manager,
-                client,
-            )
-
-    with patch("proofrun.cli.render_scenario_result"):
-        result = asyncio.run(run_test())
-
-    assert result == (True, 60)
+    assert isinstance(first, httpx.AsyncClient)
+    assert first is not second
 
 
-def test_execute_config_state_manager_without_transition() -> None:
-    """Verifies state updates do not notify without a transition."""
-    proofrun_config = ProofrunConfig.model_validate(
-        {
-            "version": "1.0",
-            "global": {
-                "base_url": "https://example.com",
-            },
-            "scenarios": [
-                {
-                    "name": "Healthy Scenario",
-                    "interval_seconds": 20,
-                    "steps": [
-                        {
-                            "name": "Ping",
-                            "request": {
-                                "method": "GET",
-                                "path": "/",
-                            },
-                            "expect": {
-                                "status": 200,
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-    )
+def test_config_error_messages() -> None:
+    with patch("proofrun.cli.render.console.print") as mock_print:
+        print_config_error("bad [bold]file", True)
+        print_config_error("bad file", False)
 
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        proofrun_config,
-        None,
-    )
+    printed = " ".join(str(call.args[0]) for call in mock_print.call_args_list)
 
-    result = ScenarioResult(
-        scenario_name="Healthy Scenario",
-        passed=True,
-        step_results=[],
-        total_latency_ms=1.0,
-    )
+    assert "Using last known-good configuration." in printed
+    assert "No valid configuration yet" in printed
+    assert "\\[bold]" in printed
 
-    state_manager = StateManager()
 
-    with (
-        patch(
-            "proofrun.cli.ScenarioRunner.run",
-            new_callable=AsyncMock,
-            return_value=result,
-        ),
-        patch("proofrun.cli.render_scenario_result"),
-    ):
-        notifier = Mock()
-        notifier.notify = AsyncMock()
+def test_internal_error_message() -> None:
+    with patch("proofrun.cli.render.console.print") as mock_print:
+        print_internal_error("Scenario A", RuntimeError("bug"))
 
-        async def run_test() -> tuple[bool, int]:
-            async with httpx.AsyncClient() as client:
-                return await execute_config(
-                    config_manager,
-                    client,
-                    state_manager,
-                    notifier,
-                )
+    printed = str(mock_print.call_args.args[0])
 
-        actual = asyncio.run(run_test())
-
-    assert actual == (True, 20)
-    notifier.notify.assert_not_awaited()
+    assert "Scenario A" in printed
+    assert "RuntimeError" in printed
 
 
 def test_render_scenario_result_passed() -> None:
-    """Verifies successful scenario rendering."""
     result = ScenarioResult(
         scenario_name="Passing Scenario",
         passed=True,
@@ -674,7 +442,7 @@ def test_render_scenario_result_passed() -> None:
         total_latency_ms=12.34,
     )
 
-    with patch("proofrun.cli.console.print") as mock_print:
+    with patch("proofrun.cli.render.console.print") as mock_print:
         render_scenario_result(result)
 
     assert mock_print.call_count == 3
@@ -682,12 +450,12 @@ def test_render_scenario_result_passed() -> None:
     table = mock_print.call_args_list[0].args[0]
     panel = mock_print.call_args_list[1].args[0]
 
-    assert table.title == ("Scenario: [bold white]Passing Scenario[/bold white]")
+    assert table.title == "Scenario: [bold white]Passing Scenario[/bold white]"
     assert panel.border_style == "green"
+    assert "Attempts" not in panel.renderable.plain
 
 
-def test_render_scenario_result_failed() -> None:
-    """Verifies failed scenario rendering and error details."""
+def test_render_scenario_result_failed_with_attempts() -> None:
     result = ScenarioResult(
         scenario_name="Failed Scenario",
         passed=False,
@@ -701,212 +469,79 @@ def test_render_scenario_result_failed() -> None:
             )
         ],
         total_latency_ms=45.67,
+        attempts=3,
     )
 
-    with patch("proofrun.cli.console.print") as mock_print:
+    with patch("proofrun.cli.render.console.print") as mock_print:
         render_scenario_result(result)
-
-    assert mock_print.call_count == 3
 
     table = mock_print.call_args_list[0].args[0]
     panel = mock_print.call_args_list[1].args[0]
 
-    assert table.title == ("Scenario: [bold white]Failed Scenario[/bold white]")
+    assert table.title == "Scenario: [bold white]Failed Scenario[/bold white]"
     assert panel.border_style == "red"
+    assert "Attempts: 3" in panel.renderable.plain
 
 
-def test_execute_config_failure_transition_notifies() -> None:
-    """Verifies failing state transitions dispatch notifications."""
-    proofrun_config = ProofrunConfig.model_validate(
-        {
-            "version": "1.0",
-            "global": {
-                "base_url": "https://example.com",
-            },
-            "scenarios": [
-                {
-                    "name": "Failing Scenario",
-                    "interval_seconds": 15,
-                    "steps": [
-                        {
-                            "name": "Ping",
-                            "request": {
-                                "method": "GET",
-                                "path": "/",
-                            },
-                            "expect": {
-                                "status": 200,
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-    )
-
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        proofrun_config,
-        None,
-    )
-
+def test_render_escapes_markup_in_names_and_errors() -> None:
     result = ScenarioResult(
-        scenario_name="Failing Scenario",
+        scenario_name="[red]Odd[/red]",
         passed=False,
         step_results=[
             StepResult(
-                step_name="Ping",
+                step_name="[bold]step",
                 passed=False,
-                status_code=500,
-                latency_ms=10.0,
-                error="Server error",
+                status_code=0,
+                latency_ms=1.0,
+                error="expected one of [200]",
             )
         ],
-        total_latency_ms=10.0,
+        total_latency_ms=1.0,
     )
 
-    notifier = Mock()
-    notifier.notify = AsyncMock()
+    with patch("proofrun.cli.render.console.print") as mock_print:
+        render_scenario_result(result)
 
-    state_manager = StateManager()
+    table = mock_print.call_args_list[0].args[0]
 
-    with (
-        patch(
-            "proofrun.cli.ScenarioRunner.run",
-            new_callable=AsyncMock,
-            return_value=result,
-        ),
-        patch("proofrun.cli.render_scenario_result"),
-    ):
-
-        async def run_test() -> tuple[bool, int]:
-            async with httpx.AsyncClient() as client:
-                return await execute_config(
-                    config_manager,
-                    client,
-                    state_manager,
-                    notifier,
-                )
-
-        actual = asyncio.run(run_test())
-
-    assert actual == (False, 15)
-    notifier.notify.assert_awaited_once()
-
-    event = notifier.notify.call_args.args[0]
-
-    assert event.scenario_name == "Failing Scenario"
-    assert event.old_status == Status.UNKNOWN
-    assert event.new_status == Status.FAILING
-    assert "Ping: Server error" in event.details
+    assert table.title == "Scenario: [bold white]\\[red]Odd\\[/red][/bold white]"
 
 
-def test_execute_config_recovery_transition_notifies() -> None:
-    """Verifies failing-to-healthy transitions dispatch notifications."""
-    proofrun_config = ProofrunConfig.model_validate(
-        {
-            "version": "1.0",
-            "global": {
-                "base_url": "https://example.com",
-            },
-            "scenarios": [
-                {
-                    "name": "Recovery Scenario",
-                    "interval_seconds": 15,
-                    "steps": [
-                        {
-                            "name": "Ping",
-                            "request": {
-                                "method": "GET",
-                                "path": "/",
-                            },
-                            "expect": {
-                                "status": 200,
-                            },
-                        }
-                    ],
-                }
-            ],
-        }
-    )
+def test_load_uvloop_returns_module_when_installed() -> None:
+    pytest.importorskip("uvloop")
 
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        proofrun_config,
-        None,
-    )
-
-    result = ScenarioResult(
-        scenario_name="Recovery Scenario",
-        passed=True,
-        step_results=[
-            StepResult(
-                step_name="Ping",
-                passed=True,
-                status_code=200,
-                latency_ms=10.0,
-                error=None,
-            )
-        ],
-        total_latency_ms=10.0,
-    )
-
-    notifier = Mock()
-    notifier.notify = AsyncMock()
-
-    state_manager = StateManager()
-    state_manager.update(
-        "Recovery Scenario",
-        False,
-    )
-
-    with (
-        patch(
-            "proofrun.cli.ScenarioRunner.run",
-            new_callable=AsyncMock,
-            return_value=result,
-        ),
-        patch("proofrun.cli.render_scenario_result"),
-    ):
-
-        async def run_test() -> tuple[bool, int]:
-            async with httpx.AsyncClient() as client:
-                return await execute_config(
-                    config_manager,
-                    client,
-                    state_manager,
-                    notifier,
-                )
-
-        actual = asyncio.run(run_test())
-
-    assert actual == (True, 15)
-    notifier.notify.assert_awaited_once()
-
-    event = notifier.notify.call_args.args[0]
-
-    assert event.scenario_name == "Recovery Scenario"
-    assert event.old_status == Status.FAILING
-    assert event.new_status == Status.HEALTHY
-    assert event.details == "All steps passing."
+    assert _load_uvloop() is not None
 
 
-def test_execute_config_without_any_config_reports_failure() -> None:
-    """Verifies the defensive path when no config and no error are available."""
-    config_manager = Mock()
-    config_manager.load.return_value = (
-        None,
-        None,
-    )
+def test_load_uvloop_returns_none_when_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "uvloop", None)
 
-    async def run_test() -> tuple[bool, int]:
-        async with httpx.AsyncClient() as client:
-            return await execute_config(
-                config_manager,
-                client,
-            )
+    assert _load_uvloop() is None
 
-    passed, interval = asyncio.run(run_test())
 
-    assert passed is False
-    assert interval == 60
+def test_run_event_loop_falls_back_to_asyncio() -> None:
+    async def main() -> int:
+        return 7
+
+    with patch("proofrun.cli.commands._uvloop", None):
+        assert run_event_loop(main()) == 7
+
+
+def test_run_event_loop_uses_uvloop_when_available() -> None:
+    calls: list[str] = []
+
+    def fake_run(coro: Any) -> int:
+        calls.append("uvloop.run")
+        assert asyncio.iscoroutine(coro)
+        coro.close()
+        return 9
+
+    async def main() -> int:
+        return 0  # pragma: no cover - closed by fake_run before it executes
+
+    with patch("proofrun.cli.commands._uvloop", SimpleNamespace(run=fake_run)):
+        assert run_event_loop(main()) == 9
+
+    assert calls == ["uvloop.run"]

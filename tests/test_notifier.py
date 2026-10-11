@@ -8,11 +8,9 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from proofrun.core.notifier import (
-    NotificationEvent,
-    WebhookNotifier,
-)
-from proofrun.core.state import Status
+from proofrun.health import Status
+from proofrun.notify.base import NotificationEvent
+from proofrun.notify.webhook import WebhookNotifier
 
 
 @pytest.mark.asyncio
@@ -38,7 +36,7 @@ async def test_webhook_alert_failure() -> None:
     )
 
     with patch(
-        "proofrun.core.notifier.console.print",
+        "proofrun.notify.webhook.console.print",
     ) as mock_print:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
@@ -78,7 +76,7 @@ async def test_webhook_alert_recovery() -> None:
     )
 
     with patch(
-        "proofrun.core.notifier.console.print",
+        "proofrun.notify.webhook.console.print",
     ) as mock_print:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
@@ -113,7 +111,7 @@ async def test_webhook_alert_http_error() -> None:
     )
 
     with patch(
-        "proofrun.core.notifier.console.print",
+        "proofrun.notify.webhook.console.print",
     ) as mock_print:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
@@ -150,7 +148,7 @@ async def test_webhook_alert_network_exception() -> None:
     )
 
     with patch(
-        "proofrun.core.notifier.console.print",
+        "proofrun.notify.webhook.console.print",
     ) as mock_print:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handler),

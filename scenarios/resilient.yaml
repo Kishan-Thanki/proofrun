@@ -1,0 +1,51 @@
+# Shows the v0.2 reliability settings. Run it against the demo API:
+#   python3 scenarios/server.py
+#   DEMO_PASSWORD=demo-password proofrun scenarios/resilient.yaml
+version: "1.0"
+
+global:
+  base_url: "http://127.0.0.1:8099"
+  headers:
+    User-Agent: "Proofrun"
+  # Defaults for every scenario below; each scenario can override them.
+  retries: 1 # re-run the whole scenario once before counting a failure
+  retry_delay_seconds: 0.5
+  failure_threshold: 3 # alert after 3 failed runs in a row
+  recovery_threshold: 2 # report recovery after 2 passing runs in a row
+
+scenarios:
+  - name: "Login with a secret from the environment"
+    interval_seconds: 30 # every scenario has its own schedule
+    steps:
+      - name: "Log in"
+        request:
+          method: POST
+          path: /login
+          json:
+            email: "demo@example.com"
+            password: "${env.DEMO_PASSWORD}" # read from the environment at load time
+        expect:
+          status: 200
+        extract:
+          token: "$.access_token"
+
+      - name: "Fetch profile"
+        request:
+          method: GET
+          path: /me
+          headers:
+            Authorization: "Bearer ${token}"
+        expect:
+          status: 200
+
+  - name: "Health endpoint"
+    interval_seconds: 10
+    failure_threshold: 1 # alert on the first failed run
+    steps:
+      - name: "GET /health"
+        request:
+          method: GET
+          path: /health
+        expect:
+          status: 200
+          max_latency_ms: 1000

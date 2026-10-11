@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
-from proofrun.core.compiler import ConfigCompilerError
-from proofrun.core.provider import ConfigProvider
+from proofrun.config.compiler import ConfigCompilerError, load_and_compile_config
+from proofrun.config.provider import ConfigProvider
 
 VALID_CONFIG = """
 version: "1.0"
@@ -182,3 +183,49 @@ def test_config_manager_handles_file_access_error(
     assert stat_error is not None
     assert isinstance(stat_error, ConfigCompilerError)
     assert "Permission denied" in str(stat_error)
+
+
+def test_unchanged_invalid_configuration_is_not_parsed_again(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "proofrun.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
+    manager = ConfigProvider(config_file)
+
+    with patch(
+        "proofrun.config.provider.load_and_compile_config",
+        wraps=load_and_compile_config,
+    ) as compile_config:
+        _, first_error = manager.load()
+        _, second_error = manager.load()
+        _, third_error = manager.load()
+
+    assert first_error is not None
+    assert second_error is first_error
+    assert third_error is first_error
+    assert compile_config.call_count == 1
+
+
+def test_fixing_an_invalid_configuration_recovers(tmp_path: Path) -> None:
+    config_file = tmp_path / "proofrun.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
+    manager = ConfigProvider(config_file)
+
+    config, error = manager.load()
+
+    assert config is None
+    assert error is not None
+
+    config_file.write_text(VALID_CONFIG, encoding="utf-8")
+    stat = config_file.stat()
+    os.utime(config_file, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+
+    config, error = manager.load()
+
+    assert error is None
+    assert config is not None
+
+    config, error = manager.load()
+
+    assert error is None
+    assert config is not None

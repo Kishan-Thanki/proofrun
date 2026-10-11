@@ -1,16 +1,15 @@
 version: "1.0"
 
 global:
-  base_url: "https://jsonplaceholder.typicode.com"
+  base_url: "http://127.0.0.1:8099"
   timeout_seconds: 8.0
   headers:
-    User-Agent: "Proofrun-Synthetic-Daemon/0.1.0"
+    User-Agent: "Proofrun"
     Accept: "application/json"
     X-Synthetic-Probe: "enabled"
 
 scenarios:
   - name: "1. End-to-End Dynamic CRUD & State Lifecycle Workflow"
-    base_url: "https://jsonplaceholder.typicode.com"
     interval_seconds: 30
     steps:
       - name: "Create Resource with Built-in Variables"
@@ -21,7 +20,7 @@ scenarios:
             Content-Type: "application/json"
             X-Step-Specific-Header: "true"
           params:
-            utm_source: "proof_daemon"
+            utm_source: "proofrun"
             debug_mode: true
           json:
             title: "Synthetic Test - ${$uuid}"

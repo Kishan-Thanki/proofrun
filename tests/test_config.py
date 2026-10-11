@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from proofrun.core.config import (
+from proofrun.config.models import (
     ExpectConfig,
     GlobalConfig,
     ProofrunConfig,
@@ -352,7 +352,7 @@ def test_proofrun_config_global_alias_unpacking() -> None:
     raw_config = {
         "version": "1.0",
         "global": {
-            "base_url": "https://jsonplaceholder.typicode.com",
+            "base_url": "https://api.example.com",
             "timeout_seconds": 15.0,
             "headers": {"X-App": "Proofrun"},
         },
@@ -376,7 +376,7 @@ def test_proofrun_config_global_alias_unpacking() -> None:
     assert config.global_config.base_url is not None
 
     base_url_str = str(config.global_config.base_url).rstrip("/")
-    assert base_url_str == "https://jsonplaceholder.typicode.com"
+    assert base_url_str == "https://api.example.com"
 
     assert config.global_config.timeout_seconds == 15.0
     assert config.global_config.headers == {"X-App": "Proofrun"}
@@ -449,3 +449,29 @@ def test_proofrun_config_full_exhaustive_yaml_parsing() -> None:
     assert step.expect.status == 201
     assert step.expect.max_latency_ms == 1500
     assert step.extract == {"user_id": "$.id"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("retries", -1),
+        ("retries", 11),
+        ("retry_delay_seconds", -0.1),
+        ("retry_delay_seconds", 301),
+        ("failure_threshold", 0),
+        ("recovery_threshold", 0),
+        ("interval_seconds", 0),
+    ],
+)
+def test_reliability_settings_are_bounded(field: str, value: float) -> None:
+    step = {
+        "name": "s",
+        "request": {"method": "GET", "path": "/"},
+        "expect": {"status": 200},
+    }
+
+    with pytest.raises(ValidationError):
+        ScenarioConfig.model_validate({"name": "x", "steps": [step], field: value})
+
+    with pytest.raises(ValidationError):
+        GlobalConfig.model_validate({field: value})

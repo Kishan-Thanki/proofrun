@@ -1,10 +1,10 @@
 version: "1.0"
 
 global:
-  base_url: "https://jsonplaceholder.typicode.com"
+  base_url: "http://127.0.0.1:8099"
   timeout_seconds: 10.0
   headers:
-    User-Agent: "Proofrun-Synthetic-Daemon/0.1.0"
+    User-Agent: "Proofrun"
     Accept: "application/json"
 
 scenarios:

@@ -8,7 +8,7 @@ import uuid
 
 import pytest
 
-from proofrun.core.context import ContextError, ExecutionContext
+from proofrun.runner.context import ContextError, ExecutionContext
 
 
 def test_initial_vars_get_and_set() -> None:

@@ -7,8 +7,14 @@ from pathlib import Path
 
 import fastjsonschema
 import pytest
+from pydantic import ValidationError
 
-from proofrun.core.compiler import ConfigCompilerError, load_and_compile_config
+from proofrun.config.compiler import (
+    ConfigCompilerError,
+    _format_validation_error,
+    load_and_compile_config,
+)
+from proofrun.config.models import ProofrunConfig
 
 # ============================================================================
 # Integration & File Loading Tests
@@ -25,7 +31,7 @@ def test_load_and_compile_config_integration() -> None:
     assert config.global_config is not None
     assert config.global_config.base_url is not None
     base_url_str = str(config.global_config.base_url).rstrip("/")
-    assert base_url_str == "https://jsonplaceholder.typicode.com"
+    assert base_url_str == "http://127.0.0.1:8099"
     assert config.global_config.timeout_seconds == 5.0
 
     scenario = config.scenarios[0]
@@ -596,3 +602,265 @@ scenarios:
         load_and_compile_config(config_path)
 
     assert "Failed to compile JSON schema" in str(exc_info.value)
+
+
+def _write(tmp_path: Path, text: str) -> Path:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(text, encoding="utf-8")
+    return config_path
+
+
+_STEP = """
+      - name: "Ping"
+        request:
+          method: "GET"
+          path: "/"
+        expect:
+          status: 200
+"""
+
+
+def test_env_references_are_resolved_before_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("TARGET_URL", "https://env.example.com")
+    monkeypatch.setenv("API_TOKEN", "s3cret")
+
+    config = load_and_compile_config(
+        _write(
+            tmp_path,
+            f"""
+version: "1.0"
+global:
+  base_url: "${{env.TARGET_URL}}"
+  headers:
+    Authorization: "Bearer ${{env.API_TOKEN}}"
+scenarios:
+  - name: "Env Scenario"
+    steps:{_STEP}
+""",
+        )
+    )
+
+    scenario = config.scenarios[0]
+
+    assert str(scenario.base_url) == "https://env.example.com/"
+    assert scenario.steps[0].request.headers["Authorization"] == "Bearer s3cret"
+
+
+def test_runtime_variables_survive_env_resolution(tmp_path: Path) -> None:
+    config = load_and_compile_config(
+        _write(
+            tmp_path,
+            """
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Chained"
+    steps:
+      - name: "Use token"
+        request:
+          method: "GET"
+          path: "/users/${user_id}"
+          headers:
+            Authorization: "Bearer ${token}"
+        expect:
+          status: 200
+""",
+        )
+    )
+
+    request = config.scenarios[0].steps[0].request
+
+    assert request.path == "/users/${user_id}"
+    assert request.headers["Authorization"] == "Bearer ${token}"
+
+
+def test_missing_env_variable_is_a_config_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("DEFINITELY_NOT_SET", raising=False)
+
+    with pytest.raises(ConfigCompilerError) as exc_info:
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+  headers:
+    X-Key: "${{env.DEFINITELY_NOT_SET}}"
+scenarios:
+  - name: "S"
+    steps:{_STEP}
+""",
+            )
+        )
+
+    message = str(exc_info.value)
+
+    assert "'DEFINITELY_NOT_SET' is not set" in message
+    assert "global.headers.X-Key" in message
+
+
+def test_validation_errors_do_not_echo_resolved_secrets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LEAKY", "super-secret-value")
+
+    with pytest.raises(ConfigCompilerError) as exc_info:
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+  timeout_seconds: "${{env.LEAKY}}"
+scenarios:
+  - name: "S"
+    steps:{_STEP}
+""",
+            )
+        )
+
+    message = str(exc_info.value)
+
+    assert "super-secret-value" not in message
+    assert "global.timeout_seconds" in message
+
+
+def test_validation_error_lists_each_problem_with_its_location(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigCompilerError) as exc_info:
+        load_and_compile_config(_write(tmp_path, 'version: "2.0"\nscenarios: []\n'))
+
+    message = str(exc_info.value)
+
+    assert message.startswith("Config validation failed:")
+    assert "  version: " in message
+
+
+def test_root_level_validation_error_is_labelled(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        ProofrunConfig.model_validate("not a mapping")
+
+    assert "<root>" in _format_validation_error(exc_info.value)
+
+
+def test_duplicate_scenario_names_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigCompilerError, match="Duplicate scenario name 'Same'"):
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Same"
+    steps:{_STEP}
+  - name: "Same"
+    steps:{_STEP}
+""",
+            )
+        )
+
+
+def test_reserved_extract_names_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigCompilerError, match="reserved for environment"):
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                """
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "S"
+    steps:
+      - name: "Extract"
+        request:
+          method: "GET"
+          path: "/"
+        expect:
+          status: 200
+        extract:
+          env.token: "$.token"
+""",
+            )
+        )
+
+
+def test_scenarios_inherit_global_reliability_settings(tmp_path: Path) -> None:
+    config = load_and_compile_config(
+        _write(
+            tmp_path,
+            f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+  interval_seconds: 15
+  retries: 2
+  retry_delay_seconds: 0.5
+  failure_threshold: 3
+  recovery_threshold: 4
+scenarios:
+  - name: "Inherits"
+    steps:{_STEP}
+  - name: "Overrides"
+    interval_seconds: 90
+    retries: 0
+    retry_delay_seconds: 7
+    failure_threshold: 1
+    recovery_threshold: 1
+    steps:{_STEP}
+""",
+        )
+    )
+
+    inherits, overrides = config.scenarios
+
+    assert (
+        inherits.interval_seconds,
+        inherits.retries,
+        inherits.retry_delay_seconds,
+        inherits.failure_threshold,
+        inherits.recovery_threshold,
+    ) == (15, 2, 0.5, 3, 4)
+    assert (
+        overrides.interval_seconds,
+        overrides.retries,
+        overrides.retry_delay_seconds,
+        overrides.failure_threshold,
+        overrides.recovery_threshold,
+    ) == (90, 0, 7.0, 1, 1)
+
+
+def test_reliability_defaults_preserve_previous_behavior(tmp_path: Path) -> None:
+    config = load_and_compile_config(
+        _write(
+            tmp_path,
+            f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Defaults"
+    steps:{_STEP}
+""",
+        )
+    )
+
+    scenario = config.scenarios[0]
+
+    assert scenario.interval_seconds == 60
+    assert scenario.retries == 0
+    assert scenario.failure_threshold == 1
+    assert scenario.recovery_threshold == 1

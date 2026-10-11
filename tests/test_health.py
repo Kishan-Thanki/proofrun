@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from proofrun.core.state import ScenarioState, StateManager, Status
+from proofrun.health import ScenarioState, StateManager, Status
 
 
 def test_scenario_state_defaults() -> None:
@@ -136,3 +136,77 @@ def test_sync_removes_stale_states() -> None:
 
     assert "Scenario A" in manager.states
     assert "Scenario B" not in manager.states
+
+
+def test_failure_threshold_delays_failing() -> None:
+    manager = StateManager()
+    manager.update("a", True)
+
+    first = manager.update("a", False, failure_threshold=3)
+    second = manager.update("a", False, failure_threshold=3)
+    third = manager.update("a", False, failure_threshold=3)
+
+    assert first.new_status == Status.HEALTHY
+    assert not first.changed
+    assert second.new_status == Status.HEALTHY
+    assert third.new_status == Status.FAILING
+    assert third.changed
+    assert manager.states["a"].fail_count == 3
+
+
+def test_a_pass_resets_the_consecutive_failure_count() -> None:
+    manager = StateManager()
+    manager.update("a", True)
+
+    manager.update("a", False, failure_threshold=2)
+    manager.update("a", True, failure_threshold=2)
+    transition = manager.update("a", False, failure_threshold=2)
+
+    assert transition.new_status == Status.HEALTHY
+    assert manager.states["a"].fail_count == 1
+
+
+def test_unknown_stays_unknown_until_the_failure_threshold() -> None:
+    manager = StateManager()
+
+    first = manager.update("a", False, failure_threshold=2)
+    second = manager.update("a", False, failure_threshold=2)
+
+    assert first.new_status == Status.UNKNOWN
+    assert not first.changed
+    assert second.old_status == Status.UNKNOWN
+    assert second.new_status == Status.FAILING
+
+
+def test_unknown_becomes_healthy_on_the_first_pass() -> None:
+    manager = StateManager()
+
+    manager.update("a", False, failure_threshold=3)
+    transition = manager.update("a", True, recovery_threshold=5)
+
+    assert transition.new_status == Status.HEALTHY
+
+
+def test_recovery_threshold_delays_recovery() -> None:
+    manager = StateManager()
+    manager.update("a", False)
+
+    first = manager.update("a", True, recovery_threshold=2)
+    second = manager.update("a", True, recovery_threshold=2)
+
+    assert first.new_status == Status.FAILING
+    assert not first.changed
+    assert second.new_status == Status.HEALTHY
+    assert second.changed
+
+
+def test_a_failure_resets_the_consecutive_pass_count() -> None:
+    manager = StateManager()
+    manager.update("a", False)
+
+    manager.update("a", True, recovery_threshold=2)
+    manager.update("a", False)
+    transition = manager.update("a", True, recovery_threshold=2)
+
+    assert transition.new_status == Status.FAILING
+    assert manager.states["a"].pass_count == 1
