@@ -60,6 +60,15 @@ so a minor release can contain breaking changes; each one is listed under
 
 ### Fixed
 
+- A configuration with no scenarios, or a scenario with no steps, used to pass and report
+  success without making a request. Both are now configuration errors.
+- Misspelled field names were silently ignored, so the check they were meant to
+  configure never ran. Unknown fields are now rejected with their location.
+- Header mismatch errors no longer print the values of sensitive headers (names
+  containing auth, cookie, token, secret, key, password, or session), so they cannot
+  reach the console or webhook alerts.
+- Dictionary keys that interpolate to the same name now fail the step instead of
+  silently dropping one of them.
 - Scenarios that ran at the same time shared one HTTP client, so a run could clear
   or read another run's cookies. Every run now has its own client.
 - Removed stale `proof` naming (badges, example headers and query values, a hard-coded
@@ -67,6 +76,9 @@ so a minor release can contain breaking changes; each one is listed under
 
 ### Breaking changes
 
+- **Configuration validation is strict.** A file with a misspelled or unknown field, no
+  scenarios, or a scenario without steps now fails to load. Run `proofrun --validate`
+  on your files before upgrading.
 - **The webhook environment variable is `PROOFRUN_WEBHOOK_URL`.** `PROOF_WEBHOOK_URL`
   is no longer read, and there is no alias. If you set the old name, alerts stop
   until you rename it.

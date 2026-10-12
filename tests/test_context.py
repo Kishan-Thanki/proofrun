@@ -260,3 +260,36 @@ def test_unknown_dynamic_variable_in_string_raises_error() -> None:
         match="Missing required context variable",
     ):
         ctx.interpolate_string("prefix_${$invalid}_suffix")
+
+
+def test_interpolated_keys_that_collide_are_an_error() -> None:
+    context = ExecutionContext()
+    context.variables.update({"a": "resolved-xyz", "b": "resolved-xyz"})
+
+    with pytest.raises(ContextError) as exc_info:
+        context.interpolate_data({"${a}": 1, "${b}": 2})
+
+    message = str(exc_info.value)
+
+    assert "'${a}'" in message
+    assert "'${b}'" in message
+    assert "resolved-xyz" not in message
+
+
+def test_interpolated_keys_that_stay_unique_are_kept() -> None:
+    context = ExecutionContext()
+    context.variables.update({"a": "first", "b": "second"})
+
+    assert context.interpolate_data({"${a}": 1, "${b}": 2, "plain": 3}) == {
+        "first": 1,
+        "second": 2,
+        "plain": 3,
+    }
+
+
+def test_a_literal_key_that_collides_with_an_interpolated_one_is_an_error() -> None:
+    context = ExecutionContext()
+    context.variables["a"] = "plain"
+
+    with pytest.raises(ContextError, match="interpolate to the same name"):
+        context.interpolate_data({"plain": 1, "${a}": 2})

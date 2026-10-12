@@ -13,7 +13,18 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, PrivateAttr
 
 
-class GlobalConfig(BaseModel):
+class StrictModel(BaseModel):
+    """Base for every configuration model.
+
+    Unknown fields are rejected. Without this a misspelled key (for example
+    ``max_latenc_ms``) would be ignored and the check it was meant to configure
+    would silently never run.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class GlobalConfig(StrictModel):
     """Global default settings applied across all scenarios and steps."""
 
     base_url: HttpUrl | None = Field(
@@ -60,7 +71,7 @@ class GlobalConfig(BaseModel):
     )
 
 
-class RequestConfig(BaseModel):
+class RequestConfig(StrictModel):
     """Defines the parameters for an outgoing HTTP request."""
 
     method: Literal["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"] = Field(
@@ -91,7 +102,7 @@ class RequestConfig(BaseModel):
     )
 
 
-class ExpectConfig(BaseModel):
+class ExpectConfig(StrictModel):
     """Defines assertion criteria evaluated against the HTTP response."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -118,7 +129,7 @@ class ExpectConfig(BaseModel):
     _compiled_schema: Callable[[Any], Any] | None = PrivateAttr(default=None)
 
 
-class StepConfig(BaseModel):
+class StepConfig(StrictModel):
     """Represents an atomic execution step in a multi-step API scenario."""
 
     name: str = Field(
@@ -139,7 +150,7 @@ class StepConfig(BaseModel):
     )
 
 
-class ScenarioConfig(BaseModel):
+class ScenarioConfig(StrictModel):
     """Defines a sequence of dependent execution steps against a target host."""
 
     name: str = Field(
@@ -181,11 +192,12 @@ class ScenarioConfig(BaseModel):
     )
     steps: list[StepConfig] = Field(
         ...,
+        min_length=1,
         description="Ordered sequence of steps executed within shared context memory.",
     )
 
 
-class ProofrunConfig(BaseModel):
+class ProofrunConfig(StrictModel):
     """Root configuration model representing a parsed Proofrun YAML file."""
 
     version: Literal["1.0"] = Field(
@@ -199,5 +211,6 @@ class ProofrunConfig(BaseModel):
     )
     scenarios: list[ScenarioConfig] = Field(
         ...,
+        min_length=1,
         description="List of scenario workflows defined in the configuration file.",
     )

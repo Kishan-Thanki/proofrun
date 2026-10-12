@@ -172,12 +172,22 @@ class ExecutionContext:
             return self.interpolate_string(data)
 
         if isinstance(data, dict):
-            return {
-                (
-                    self.interpolate_string(key) if isinstance(key, str) else key
-                ): self.interpolate_data(value)
-                for key, value in data.items()
-            }
+            result: dict[Any, Any] = {}
+            sources: dict[Any, Any] = {}
+
+            for key, value in data.items():
+                new_key = self.interpolate_string(key) if isinstance(key, str) else key
+
+                if new_key in result:
+                    raise ContextError(
+                        f"Keys {sources[new_key]!r} and {key!r} interpolate to "
+                        "the same name; keys must stay unique"
+                    )
+
+                result[new_key] = self.interpolate_data(value)
+                sources[new_key] = key
+
+            return result
 
         if isinstance(data, list):
             return [self.interpolate_data(item) for item in data]

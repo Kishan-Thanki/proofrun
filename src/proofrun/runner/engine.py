@@ -14,6 +14,46 @@ import httpx
 from proofrun.config.models import ScenarioConfig, StepConfig
 from proofrun.runner.context import ExecutionContext
 
+_SENSITIVE_HEADER_PARTS = (
+    "auth",
+    "cookie",
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "key",
+    "session",
+    "credential",
+)
+
+
+def is_sensitive_header(header_name: str) -> bool:
+    """Return whether a header's value must not appear in failure messages."""
+    lowered = header_name.lower()
+
+    return any(part in lowered for part in _SENSITIVE_HEADER_PARTS)
+
+
+def describe_header_mismatch(
+    header_name: str,
+    expected_value: str,
+    actual_value: str | None,
+) -> str:
+    """Describe a failed header assertion without leaking sensitive values."""
+    if not is_sensitive_header(header_name):
+        return (
+            f"Header '{header_name}' mismatch: expected "
+            f"'{expected_value}', got '{actual_value}'"
+        )
+
+    if actual_value is None:
+        return f"Header '{header_name}' is missing"
+
+    return (
+        f"Header '{header_name}' mismatch "
+        "(values are hidden because this header may contain secrets)"
+    )
+
 
 class EngineError(Exception):
     """Raised when HTTP step execution or assertion evaluation fails."""
@@ -146,8 +186,11 @@ class ScenarioRunner:
 
                 if actual_value != expected_value:
                     raise EngineError(
-                        f"Header '{expected_header}' mismatch: expected "
-                        f"'{expected_value}', got '{actual_value}'"
+                        describe_header_mismatch(
+                            expected_header,
+                            expected_value,
+                            actual_value,
+                        )
                     )
 
             response_data: Any = None

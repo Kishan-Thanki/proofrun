@@ -15,7 +15,11 @@ from proofrun.config.models import (
     StepConfig,
 )
 from proofrun.runner.context import ExecutionContext
-from proofrun.runner.engine import ScenarioRunner
+from proofrun.runner.engine import (
+    ScenarioRunner,
+    describe_header_mismatch,
+    is_sensitive_header,
+)
 
 
 def build_runner(steps: list[StepConfig]) -> ScenarioRunner:
@@ -525,3 +529,85 @@ async def test_scenario_runner_custom_context_and_successful_run() -> None:
     assert len(scenario_result.step_results) == 2
     assert scenario_result.step_results[0].passed is True
     assert scenario_result.step_results[1].passed is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Authorization",
+        "Proxy-Authorization",
+        "Cookie",
+        "Set-Cookie",
+        "X-Api-Key",
+        "X-Auth-Token",
+        "X-Session-Id",
+        "X-Client-Secret",
+        "X-Password",
+    ],
+)
+def test_sensitive_header_names_are_detected(name: str) -> None:
+    assert is_sensitive_header(name)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["Content-Type", "Cache-Control", "ETag", "Keep-Alive", "X-Request-Id", "Server"],
+)
+def test_ordinary_header_names_are_not_sensitive(name: str) -> None:
+    assert not is_sensitive_header(name)
+
+
+def test_ordinary_header_mismatch_shows_both_values() -> None:
+    message = describe_header_mismatch("Content-Type", "text/html", "application/json")
+
+    assert message == (
+        "Header 'Content-Type' mismatch: expected 'text/html', got 'application/json'"
+    )
+
+
+def test_missing_ordinary_header_is_reported() -> None:
+    message = describe_header_mismatch("X-Request-Id", "abc", None)
+
+    assert "got 'None'" in message
+
+
+def test_sensitive_header_mismatch_hides_both_values() -> None:
+    message = describe_header_mismatch("Set-Cookie", "session=expected", "session=real")
+
+    assert "expected" not in message
+    assert "real" not in message
+    assert "Set-Cookie" in message
+    assert "hidden" in message
+
+
+def test_missing_sensitive_header_has_no_values_to_leak() -> None:
+    message = describe_header_mismatch("Authorization", "Bearer expected", None)
+
+    assert message == "Header 'Authorization' is missing"
+
+
+@pytest.mark.asyncio
+async def test_sensitive_header_secret_never_reaches_the_step_error() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"Set-Cookie": "session=super-secret-cookie"},
+            json={},
+        )
+
+    step = StepConfig(
+        name="Cookie Check",
+        request=RequestConfig(method="GET", path="/", timeout=5.0),
+        expect=ExpectConfig(
+            status=200,
+            headers={"Set-Cookie": "session=other-secret"},
+        ),
+    )
+
+    async with httpx.AsyncClient(transport=make_transport(handler)) as client:
+        result = await build_runner([step]).execute_step(step, client)
+
+    assert result.passed is False
+    assert result.error is not None
+    assert "super-secret-cookie" not in result.error
+    assert "other-secret" not in result.error

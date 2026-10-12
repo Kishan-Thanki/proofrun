@@ -864,3 +864,52 @@ scenarios:
     assert scenario.retries == 0
     assert scenario.failure_threshold == 1
     assert scenario.recovery_threshold == 1
+
+
+def test_empty_scenario_list_fails_to_load(tmp_path: Path) -> None:
+    with pytest.raises(
+        ConfigCompilerError, match="scenarios: List should have at least 1"
+    ):
+        load_and_compile_config(
+            _write(tmp_path, 'version: "1.0"\nscenarios: []\n'),
+        )
+
+
+def test_scenario_without_steps_fails_to_load(tmp_path: Path) -> None:
+    with pytest.raises(ConfigCompilerError, match="steps: List should have at least 1"):
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                """
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Nothing to do"
+    steps: []
+""",
+            )
+        )
+
+
+def test_misspelled_field_reports_its_location(tmp_path: Path) -> None:
+    with pytest.raises(ConfigCompilerError) as exc_info:
+        load_and_compile_config(
+            _write(
+                tmp_path,
+                f"""
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Typo"
+    retriess: 3
+    steps:{_STEP}
+""",
+            )
+        )
+
+    message = str(exc_info.value)
+
+    assert "scenarios.0.retriess" in message
+    assert "Extra inputs are not permitted" in message

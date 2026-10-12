@@ -475,3 +475,112 @@ def test_reliability_settings_are_bounded(field: str, value: float) -> None:
 
     with pytest.raises(ValidationError):
         GlobalConfig.model_validate({field: value})
+
+
+_STEP: dict[str, Any] = {
+    "name": "s",
+    "request": {"method": "GET", "path": "/"},
+    "expect": {"status": 200},
+}
+
+
+def _scenario(**overrides: Any) -> dict[str, Any]:
+    return {"name": "x", "steps": [dict(_STEP)], **overrides}
+
+
+def test_a_configuration_needs_at_least_one_scenario() -> None:
+    with pytest.raises(ValidationError, match="at least 1 item"):
+        ProofrunConfig.model_validate({"version": "1.0", "scenarios": []})
+
+
+def test_a_scenario_needs_at_least_one_step() -> None:
+    with pytest.raises(ValidationError, match="at least 1 item"):
+        ScenarioConfig.model_validate({"name": "x", "steps": []})
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"version": "1.0", "scenarioz": [], "scenarios": [_scenario()]},
+        {
+            "version": "1.0",
+            "global": {"timeout_second": 5},
+            "scenarios": [_scenario()],
+        },
+        {"version": "1.0", "scenarios": [_scenario(retriess=3)]},
+        {"version": "1.0", "scenarios": [_scenario(failure_treshold=3)]},
+        {
+            "version": "1.0",
+            "scenarios": [
+                _scenario(
+                    steps=[
+                        {
+                            **_STEP,
+                            "request": {"method": "GET", "path": "/", "timeoutt": 1},
+                        }
+                    ]
+                )
+            ],
+        },
+        {
+            "version": "1.0",
+            "scenarios": [
+                _scenario(
+                    steps=[
+                        {
+                            **_STEP,
+                            "expect": {"status": 200, "max_latenc_ms": 1},
+                        }
+                    ]
+                )
+            ],
+        },
+        {
+            "version": "1.0",
+            "scenarios": [_scenario(steps=[{**_STEP, "extractt": {"a": "$.a"}}])],
+        },
+    ],
+    ids=[
+        "root",
+        "global",
+        "scenario-retries",
+        "scenario-threshold",
+        "request",
+        "expect",
+        "step",
+    ],
+)
+def test_unknown_fields_are_rejected_at_every_level(
+    document: dict[str, Any],
+) -> None:
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        ProofrunConfig.model_validate(document)
+
+
+def test_aliased_fields_still_work_with_strict_models() -> None:
+    config = ProofrunConfig.model_validate(
+        {
+            "version": "1.0",
+            "global": {"base_url": "https://example.com"},
+            "scenarios": [
+                _scenario(
+                    steps=[
+                        {
+                            "name": "s",
+                            "request": {
+                                "method": "POST",
+                                "path": "/",
+                                "json": {"a": 1},
+                            },
+                            "expect": {"status": 201, "schema": {"type": "object"}},
+                        }
+                    ]
+                )
+            ],
+        }
+    )
+
+    step = config.scenarios[0].steps[0]
+
+    assert step.request.json_payload == {"a": 1}
+    assert step.expect.schema_data == {"type": "object"}

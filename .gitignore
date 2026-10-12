@@ -82,3 +82,7 @@ __pypackages__/
 
 
 FUTURE.md
+
+# downloaded archives and patches
+*.zip
+*.patch
