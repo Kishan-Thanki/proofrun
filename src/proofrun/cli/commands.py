@@ -7,7 +7,9 @@ monitoring scenarios using Typer and Rich.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib
+import signal
 from collections.abc import Coroutine
 from pathlib import Path
 from types import ModuleType
@@ -158,7 +160,19 @@ async def run_once(
     return all(result.passed for result in results)
 
 
+DEFAULT_METRICS_HOST = "127.0.0.1"
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def install_stop_on_sigterm(stop: asyncio.Event) -> None:
+    """Set ``stop`` when the process receives SIGTERM.
+
+    SIGTERM is what ``systemctl stop`` and ``docker stop`` send. Without a handler
+    the daemon is killed abruptly, and as PID 1 in a container it does not receive
+    the signal at all, so ``docker stop`` waits and then kills it.
+    """
+    with contextlib.suppress(NotImplementedError):  # not supported on Windows
+        asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
 
 
 async def run_daemon_mode(
@@ -168,7 +182,20 @@ async def run_daemon_mode(
     metrics_host: str,
     metrics_port: int | None,
 ) -> int:
-    """Run the daemon until it is interrupted. Returns the exit code."""
+    """Run the daemon until it is stopped. Returns the exit code."""
+    provider = ConfigProvider(config_path)
+    _, config_error = provider.load()
+
+    if config_error is not None:
+        console.print(
+            f"[bold red]Configuration Error:[/bold red] {escape(str(config_error))}"
+        )
+        console.print(
+            "[yellow]Not starting: there is no valid configuration to monitor. "
+            "Fix the file and start again.[/yellow]"
+        )
+        return 1
+
     registry: MetricsRegistry | None = None
     server: MetricsServer | None = None
 
@@ -205,7 +232,7 @@ async def run_daemon_mode(
             )
 
             daemon = Daemon(
-                ConfigProvider(config_path),
+                provider,
                 StateManager(),
                 new_client,
                 notifier=notifier,
@@ -221,7 +248,13 @@ async def run_daemon_mode(
                 "Press Ctrl+C to stop.[/bold green]\n"
             )
 
-            await daemon.run()
+            stop = asyncio.Event()
+            install_stop_on_sigterm(stop)
+
+            await daemon.run(stop)
+
+            if stop.is_set():
+                console.print("\n[yellow]Daemon stopped by SIGTERM.[/yellow]")
     finally:
         if server is not None:
             await server.stop()
@@ -286,16 +319,17 @@ def run_command(
         ),
     ] = None,
     metrics_host: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--metrics-host",
             envvar="PROOFRUN_METRICS_HOST",
             help=(
-                "Address the metrics server binds to. The default is loopback; "
-                "other addresses expose it, unauthenticated, to the network."
+                "Address the metrics server binds to. The default is 127.0.0.1 "
+                "(loopback); other addresses expose it, unauthenticated, to the "
+                "network."
             ),
         ),
-    ] = "127.0.0.1",
+    ] = None,
     _show_version: Annotated[
         bool | None,
         typer.Option(
@@ -321,8 +355,10 @@ def run_command(
 
     if once:
         for ignored, given in (
+            ("--interval", interval is not None),
             ("--webhook-url", webhook_url is not None),
             ("--metrics-port", metrics_port is not None),
+            ("--metrics-host", metrics_host is not None),
         ):
             if given:
                 console.print(
@@ -340,7 +376,7 @@ def run_command(
                 config_path,
                 interval,
                 webhook_url,
-                metrics_host,
+                metrics_host or DEFAULT_METRICS_HOST,
                 metrics_port,
             )
         )

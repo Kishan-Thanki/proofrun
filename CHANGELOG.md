@@ -60,6 +60,19 @@ so a minor release can contain breaking changes; each one is listed under
 
 ### Fixed
 
+- A failed webhook delivery printed the full webhook URL, which often contains a secret
+  token, and a timeout printed nothing useful. Failures now report only the reason (an
+  HTTP status, a timeout, or a connection error) and the scenario name.
+- The daemon kept running with no valid configuration, looking alive while monitoring
+  nothing. An invalid configuration at startup now exits with code 1. An invalid edit
+  while running still keeps the last working configuration.
+- The daemon was killed abruptly by `SIGTERM`, and as PID 1 in a container it never
+  received the signal, so `docker stop` waited and then killed it. `SIGTERM` now stops
+  it cleanly.
+- `expect.status` accepted an empty list and codes outside 100 to 599, which can never
+  match a response. Both are now configuration errors.
+- `--interval` and `--metrics-host` were silently ignored in run-once mode. They now
+  produce the same warning as `--webhook-url` and `--metrics-port`.
 - A configuration with no scenarios, or a scenario with no steps, used to pass and report
   success without making a request. Both are now configuration errors.
 - Misspelled field names were silently ignored, so the check they were meant to
@@ -76,6 +89,9 @@ so a minor release can contain breaking changes; each one is listed under
 
 ### Breaking changes
 
+- **A daemon with an invalid configuration at startup now exits with code 1** instead of
+  waiting for the file to be fixed. Under systemd or Docker, a restart policy will keep
+  retrying until the file is valid.
 - **Configuration validation is strict.** A file with a misspelled or unknown field, no
   scenarios, or a scenario without steps now fails to load. Run `proofrun --validate`
   on your files before upgrading.

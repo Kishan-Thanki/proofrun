@@ -255,7 +255,7 @@ Each step's `expect` block supports:
 
 | Assertion        | Example                                         | Notes                                                                  |
 | ---------------- | ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `status`         | `status: 200` or `status: [200, 201]`           | Required. A list passes if the status matches any entry.               |
+| `status`         | `status: 200` or `status: [200, 201]`           | Required. One code, or a non-empty list, each from 100 to 599. A list passes if the status matches any entry. |
 | `max_latency_ms` | `max_latency_ms: 500`                           | Fails if the response took longer. Must be \> 0.                       |
 | `headers`        | `headers: { Content-Type: "application/json" }` | Names are case-insensitive, values must match **exactly**. Values of sensitive headers (names containing auth, cookie, token, secret, key, password, or session) are hidden in failure messages. |
 | `schema`         | inline JSON Schema, or a path to a file         | Validates the JSON response body. Fails if the body is not valid JSON. |
@@ -408,6 +408,10 @@ In daemon mode Proofrun runs your scenarios on a loop and tracks each one as
   without a restart. Added scenarios start immediately and removed ones stop. If
   an edit is invalid, Proofrun keeps running the last working configuration and
   prints the error once.
+- **Starts only with a valid config.** If the file is invalid when the daemon
+  starts, it prints the error and exits with code 1 instead of idling.
+- **Stops cleanly.** Ctrl+C or `SIGTERM` (what `systemctl stop` and `docker stop`
+  send) cancels running scenarios, closes the metrics port, and exits with code 0.
 - **Isolated runs.** Every run uses its own HTTP client, so cookies and
   connections are never shared between scenarios that run at the same time.
 
@@ -451,8 +455,9 @@ The webhook receives plain JSON via `POST`:
 | `FAILING` → `HEALTHY` | `scenario_recovered`                             |
 
 With higher thresholds the same transitions apply, they just happen later.
-Webhook delivery has a 5 second timeout. A failed delivery is printed to the
-console and **not retried**.
+Webhook delivery has a 5 second timeout. A failed delivery is printed with its
+reason (an HTTP status, a timeout, or a connection error) and **not retried**. The
+webhook URL is never printed, because it often contains a secret.
 
 ## Metrics
 
@@ -571,6 +576,7 @@ docker run -d --name proofrun --restart unless-stopped \
 
 - Tags: `latest`, the exact version (`0.2.0`), and `major.minor` (`0.2`). The image is
   based on Alpine and is small.
+- `docker stop` shuts the container down cleanly within a second or two.
 - The container runs as an unprivileged user (uid `10001`). Mount your configs
   read-only.
 - Inside a container the metrics server has to listen on `0.0.0.0` to be
@@ -633,7 +639,8 @@ python -m proofrun <config.yaml>       # equivalent to the proofrun command
 | `--version`, `-v`     | Print the version and exit.                                                                 |
 | `--install-completion`, `--show-completion` | Install, or print, shell completion for `proofrun`.                  |
 
-Daemon-only options given in run-once mode are ignored, with a warning.
+Daemon-only options (`--interval`, `--webhook-url`, `--metrics-port`, `--metrics-host`)
+given in run-once mode are ignored, with a warning.
 
 ## Behavior notes and limits
 

@@ -4,11 +4,33 @@ from __future__ import annotations
 
 import httpx
 from rich.console import Console
+from rich.markup import escape
 
 from proofrun.health import Status
 from proofrun.notify.base import NotificationEvent
 
 console = Console()
+
+TIMEOUT_SECONDS = 5.0
+
+
+def describe_delivery_error(err: httpx.HTTPError) -> str:
+    """Describe a failed webhook delivery without exposing the webhook URL.
+
+    The text of an ``httpx`` error can include the full request URL, and webhook
+    URLs often carry a secret token in their path, so only the failure category
+    is reported.
+    """
+    if isinstance(err, httpx.HTTPStatusError):
+        return f"the endpoint responded with HTTP {err.response.status_code}"
+
+    if isinstance(err, httpx.TimeoutException):
+        return f"the request timed out after {TIMEOUT_SECONDS:g}s"
+
+    if isinstance(err, httpx.ConnectError):
+        return "could not connect to the endpoint"
+
+    return f"the request failed ({type(err).__name__})"
 
 
 class WebhookNotifier:
@@ -43,7 +65,7 @@ class WebhookNotifier:
             response = await self.client.post(
                 self.webhook_url,
                 json=payload,
-                timeout=5.0,
+                timeout=TIMEOUT_SECONDS,
             )
             response.raise_for_status()
 
@@ -52,4 +74,8 @@ class WebhookNotifier:
             )
 
         except httpx.HTTPError as err:
-            console.print(f"[bold red]Failed to send webhook:[/bold red] {err}")
+            console.print(
+                f"[bold red]Failed to send webhook alert for "
+                f"'{escape(event.scenario_name)}':[/bold red] "
+                f"{describe_delivery_error(err)}"
+            )

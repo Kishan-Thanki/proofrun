@@ -10,7 +10,7 @@ import pytest
 
 from proofrun.health import Status
 from proofrun.notify.base import NotificationEvent
-from proofrun.notify.webhook import WebhookNotifier
+from proofrun.notify.webhook import WebhookNotifier, describe_delivery_error
 
 
 @pytest.mark.asyncio
@@ -127,8 +127,9 @@ async def test_webhook_alert_http_error() -> None:
 
         call_args = mock_print.call_args[0][0]
 
-        assert "[bold red]Failed to send webhook:[/bold red]" in call_args
-        assert "500" in call_args
+        assert "Failed to send webhook alert for 'Payment API'" in call_args
+        assert "HTTP 500" in call_args
+        assert "fake.webhook.com" not in call_args
 
 
 @pytest.mark.asyncio
@@ -164,8 +165,9 @@ async def test_webhook_alert_network_exception() -> None:
 
         call_args = mock_print.call_args[0][0]
 
-        assert "[bold red]Failed to send webhook:[/bold red]" in call_args
-        assert "Network unreachable" in call_args
+        assert "Failed to send webhook alert for 'Payment API'" in call_args
+        assert "could not connect to the endpoint" in call_args
+        assert "fake.webhook.com" not in call_args
 
 
 @pytest.mark.asyncio
@@ -192,3 +194,72 @@ async def test_webhook_alert_unknown_status_is_ignored() -> None:
         mock_post.assert_not_awaited()
 
     await client.aclose()
+
+
+SECRET_URL = "https://hooks.example.com/services/T000/B000/SECRET-TOKEN-123"
+
+
+def _raise(error_type: type[httpx.RequestError]) -> object:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise error_type("failure text", request=request)
+
+    return handler
+
+
+@pytest.mark.parametrize(
+    ("handler", "expected"),
+    [
+        (lambda request: httpx.Response(404), "HTTP 404"),
+        (lambda request: httpx.Response(500), "HTTP 500"),
+        (_raise(httpx.ConnectError), "could not connect to the endpoint"),
+        (_raise(httpx.ConnectTimeout), "timed out after 5s"),
+        (_raise(httpx.ReadTimeout), "timed out after 5s"),
+        (_raise(httpx.WriteError), "the request failed (WriteError)"),
+    ],
+    ids=["404", "500", "connect", "connect-timeout", "read-timeout", "other"],
+)
+@pytest.mark.asyncio
+async def test_delivery_failures_never_print_the_webhook_url(
+    handler: object,
+    expected: str,
+) -> None:
+    event = NotificationEvent(
+        scenario_name="Payment API",
+        old_status=Status.HEALTHY,
+        new_status=Status.FAILING,
+    )
+
+    with patch("proofrun.notify.webhook.console.print") as mock_print:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),  # type: ignore[arg-type]
+        ) as client:
+            await WebhookNotifier(client, SECRET_URL).notify(event)
+
+    printed = mock_print.call_args[0][0]
+
+    assert expected in printed
+    assert "SECRET-TOKEN" not in printed
+    assert "hooks.example.com" not in printed
+
+
+@pytest.mark.asyncio
+async def test_delivery_failure_message_escapes_markup_in_scenario_names() -> None:
+    event = NotificationEvent(
+        scenario_name="[red]odd[/red]",
+        old_status=Status.HEALTHY,
+        new_status=Status.FAILING,
+    )
+
+    with patch("proofrun.notify.webhook.console.print") as mock_print:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda request: httpx.Response(500)),
+        ) as client:
+            await WebhookNotifier(client, SECRET_URL).notify(event)
+
+    assert "\\[red]odd\\[/red]" in mock_print.call_args[0][0]
+
+
+def test_describe_delivery_error_has_a_fallback_for_unknown_errors() -> None:
+    assert describe_delivery_error(httpx.HTTPError("anything")) == (
+        "the request failed (HTTPError)"
+    )

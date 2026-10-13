@@ -16,7 +16,7 @@ permissions:
 jobs:
   quality:
     name: Quality & Tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     strategy:
       fail-fast: false
@@ -27,15 +27,15 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -51,20 +51,20 @@ jobs:
 
   build:
     name: Build Package
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: quality
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -81,14 +81,17 @@ jobs:
           test -f dist/*.whl
           test -f dist/*.tar.gz
 
+      - name: Install the built packages in a clean environment
+        run: make dist-smoke
+
   docker:
     name: Docker Image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: quality
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build image
         run: docker build --tag proofrun:ci .

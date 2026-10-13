@@ -1,7 +1,7 @@
 PYTHON ?= python3
 
 .PHONY: install test coverage coverage-html lint format format-check typecheck check \
-	serve integration build clean full
+	serve integration build dist-smoke clean full
 
 full: clean install check build
 
@@ -62,6 +62,17 @@ integration:
 		uv run proofrun scenarios/$$name.yaml || status=1; \
 	done; \
 	exit $$status
+
+dist-smoke:
+	@set -e; tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	for pkg in dist/*.whl dist/*.tar.gz; do \
+		echo "==> installing $$pkg in a clean environment"; \
+		$(PYTHON) -m venv "$$tmp/venv"; \
+		"$$tmp/venv/bin/pip" install --quiet "$$pkg"; \
+		"$$tmp/venv/bin/proofrun" --version; \
+		DEMO_PASSWORD=smoke "$$tmp/venv/bin/proofrun" scenarios/resilient.yaml --validate >/dev/null; \
+		rm -rf "$$tmp/venv"; \
+	done
 
 build:
 	uv build

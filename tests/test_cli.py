@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
 import socket
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -14,7 +17,14 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from proofrun.cli.commands import _load_uvloop, app, new_client, run_event_loop
+from proofrun.cli.commands import (
+    _load_uvloop,
+    app,
+    install_stop_on_sigterm,
+    new_client,
+    run_daemon_mode,
+    run_event_loop,
+)
 from proofrun.cli.render import (
     print_config_error,
     print_internal_error,
@@ -545,3 +555,133 @@ def test_run_event_loop_uses_uvloop_when_available() -> None:
         assert run_event_loop(main()) == 9
 
     assert calls == ["uvloop.run"]
+
+
+def test_cli_once_mode_warns_about_interval_and_metrics_host(
+    tmp_path: Path,
+    local_api: str,
+) -> None:
+    config = write_config(tmp_path, local_api)
+
+    result = runner.invoke(
+        app,
+        [str(config), "--interval", "30", "--metrics-host", "0.0.0.0"],
+    )
+
+    assert result.exit_code == 0
+    assert "--interval is ignored" in result.stdout
+    assert "--metrics-host is ignored" in result.stdout
+
+
+def test_cli_once_mode_without_daemon_options_prints_no_warning(
+    tmp_path: Path,
+    local_api: str,
+) -> None:
+    result = runner.invoke(app, [str(write_config(tmp_path, local_api))])
+
+    assert "is ignored" not in result.stdout
+
+
+def test_daemon_refuses_to_start_with_an_invalid_configuration(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "bad.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
+
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        result = runner.invoke(app, [str(config_file), "--daemon"])
+
+    assert result.exit_code == 1
+    assert "Configuration Error" in result.stdout
+    assert "Not starting" in result.stdout
+    assert FakeDaemon.instances == []
+
+
+def test_an_invalid_configuration_does_not_open_the_metrics_port(
+    tmp_path: Path,
+) -> None:
+    config_file = tmp_path / "bad.yaml"
+    config_file.write_text("version: '1.0'\nscenarios: []\n", encoding="utf-8")
+
+    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        result = runner.invoke(
+            app,
+            [str(config_file), "--daemon", "--metrics-port", str(free_port())],
+        )
+
+    assert result.exit_code == 1
+    assert "Metrics:" not in result.stdout
+
+
+@pytest.fixture
+def harmless_sigterm() -> Iterator[None]:
+    """Make a stray SIGTERM harmless to the test process itself."""
+    previous = signal.signal(signal.SIGTERM, lambda *_: None)
+
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM handlers on Windows")
+@pytest.mark.asyncio
+async def test_sigterm_sets_the_stop_event(harmless_sigterm: None) -> None:
+    stop = asyncio.Event()
+    install_stop_on_sigterm(stop)
+
+    try:
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(stop.wait(), timeout=2)
+    finally:
+        asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
+
+    assert stop.is_set()
+
+
+@pytest.mark.asyncio
+async def test_installing_the_sigterm_handler_is_safe_where_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unsupported(*args: object, **kwargs: object) -> None:
+        raise NotImplementedError
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "add_signal_handler", unsupported)
+
+    install_stop_on_sigterm(asyncio.Event())
+
+
+class WaitingDaemon:
+    """Stands in for Daemon: runs until it is told to stop."""
+
+    def __init__(self, provider: Any, state: Any, client_factory: Any, **kwargs: Any):
+        self.stopped = False
+
+    async def run(self, stop: asyncio.Event | None = None) -> None:
+        assert stop is not None
+        await stop.wait()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no SIGTERM handlers on Windows")
+@pytest.mark.asyncio
+async def test_daemon_mode_stops_cleanly_on_sigterm(
+    tmp_path: Path,
+    harmless_sigterm: None,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    with patch("proofrun.cli.commands.Daemon", WaitingDaemon):
+        task = asyncio.create_task(
+            run_daemon_mode(config, None, None, "127.0.0.1", None)
+        )
+
+        try:
+            await asyncio.sleep(0.3)
+            os.kill(os.getpid(), signal.SIGTERM)
+            exit_code = await asyncio.wait_for(task, timeout=5)
+        finally:
+            asyncio.get_running_loop().remove_signal_handler(signal.SIGTERM)
+
+    assert exit_code == 0
+    assert "stopped by SIGTERM" in capsys.readouterr().out

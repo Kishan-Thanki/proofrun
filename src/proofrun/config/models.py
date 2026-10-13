@@ -10,7 +10,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, PrivateAttr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    PrivateAttr,
+    field_validator,
+)
 
 
 class StrictModel(BaseModel):
@@ -109,7 +116,7 @@ class ExpectConfig(StrictModel):
 
     status: int | list[int] = Field(
         ...,
-        description="Expected HTTP status code(s).",
+        description="Expected HTTP status code(s), each between 100 and 599.",
     )
     headers: dict[str, str] = Field(
         default_factory=dict,
@@ -127,6 +134,21 @@ class ExpectConfig(StrictModel):
     )
 
     _compiled_schema: Callable[[Any], Any] | None = PrivateAttr(default=None)
+
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, value: int | list[int]) -> int | list[int]:
+        """Reject empty lists and codes outside the valid HTTP range."""
+        codes = value if isinstance(value, list) else [value]
+
+        if not codes:
+            raise ValueError("status must not be an empty list")
+
+        for code in codes:
+            if not 100 <= code <= 599:
+                raise ValueError(f"status code {code} is outside the range 100-599")
+
+        return value
 
 
 class StepConfig(StrictModel):

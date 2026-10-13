@@ -584,3 +584,27 @@ def test_aliased_fields_still_work_with_strict_models() -> None:
 
     assert step.request.json_payload == {"a": 1}
     assert step.expect.schema_data == {"type": "object"}
+
+
+@pytest.mark.parametrize("status", [200, 100, 599, [200, 201], [404]])
+def test_valid_status_codes_are_accepted(status: int | list[int]) -> None:
+    assert ExpectConfig(status=status).status == status
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        ([], "must not be an empty list"),
+        (0, "outside the range 100-599"),
+        (99, "outside the range 100-599"),
+        (600, "outside the range 100-599"),
+        (-5, "outside the range 100-599"),
+        ([200, 999], "status code 999 is outside"),
+    ],
+)
+def test_invalid_status_codes_are_rejected(
+    status: int | list[int],
+    message: str,
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        ExpectConfig(status=status)
