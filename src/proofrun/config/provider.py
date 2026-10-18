@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from proofrun.config.compiler import (
@@ -17,10 +17,12 @@ class ConfigProvider:
     """Manage a cached, compiled Proofrun configuration."""
 
     config_path: Path
-    _config: ProofrunConfig | None = None
-    _last_modified_ns: int | None = None
-    _failed_modified_ns: int | None = None
-    _failed_error: ConfigCompilerError | None = None
+    _config: ProofrunConfig | None = field(default=None, init=False, repr=False)
+    _last_modified_ns: int | None = field(default=None, init=False, repr=False)
+    _failed_modified_ns: int | None = field(default=None, init=False, repr=False)
+    _failed_error: ConfigCompilerError | None = field(
+        default=None, init=False, repr=False
+    )
 
     def load(self) -> tuple[ProofrunConfig | None, ConfigCompilerError | None]:
         """Load the configuration when needed.

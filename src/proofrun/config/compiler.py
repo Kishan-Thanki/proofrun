@@ -28,7 +28,7 @@ _INHERITED_SCENARIO_FIELDS = (
 
 
 class ConfigCompilerError(Exception):
-    """Raised when configuration loading or compilation fails."""
+    """Raised when a Proofrun configuration cannot be loaded, validated, or compiled."""
 
 
 def _format_validation_error(err: ValidationError) -> str:
@@ -72,11 +72,18 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
         with path.open("r", encoding="utf-8") as file:
             raw_data = yaml.safe_load(file)
     except yaml.YAMLError as err:
-        raise ConfigCompilerError(f"Invalid YAML syntax in {path}: {err}") from err
+        mark = getattr(err, "problem_mark", None)
+        location = (
+            f" at line {mark.line + 1}, column {mark.column + 1}"
+            if mark is not None
+            else ""
+        )
+        raise ConfigCompilerError(f"Invalid YAML syntax in {path}{location}.") from None
     except OSError as err:
+        reason = err.strerror or "I/O error"
         raise ConfigCompilerError(
-            f"Failed to read configuration file {path}: {err}"
-        ) from err
+            f"Failed to read configuration file {path}: {reason}."
+        ) from None
 
     if not isinstance(raw_data, dict):
         raise ConfigCompilerError(
@@ -172,9 +179,9 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
                         f"'{step.expect.schema_data}': {err}"
                     ) from err
 
-            if raw_schema is None:  # pragma: no cover
+            if not isinstance(raw_schema, dict):
                 raise ConfigCompilerError(
-                    f"Invalid schema configuration in scenario "
+                    f"JSON Schema must be an object in scenario "
                     f"'{scenario.name}', step '{step.name}'."
                 )
 

@@ -17,18 +17,18 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from proofrun.cli.commands import (
-    _load_uvloop,
-    app,
-    install_stop_on_sigterm,
-    new_client,
-    run_daemon_mode,
-    run_event_loop,
-)
+from proofrun.cli.commands import app
 from proofrun.cli.render import (
     print_config_error,
     print_internal_error,
     render_scenario_result,
+)
+from proofrun.cli.runtime import (
+    _load_uvloop,
+    install_stop_on_sigterm,
+    new_client,
+    run_daemon_mode,
+    run_event_loop,
 )
 from proofrun.metrics.registry import MetricsRegistry
 from proofrun.monitor.daemon import Daemon
@@ -220,7 +220,7 @@ def test_cli_validate_cannot_be_combined_with_daemon(tmp_path: Path) -> None:
     assert result.exit_code == 2
 
 
-def test_cli_once_mode_warns_about_daemon_only_options(
+def test_cli_once_mode_rejects_daemon_only_options(
     tmp_path: Path,
     local_api: str,
 ) -> None:
@@ -232,20 +232,18 @@ def test_cli_once_mode_warns_about_daemon_only_options(
             str(config),
             "--webhook-url",
             "https://hooks.example.com/x",
-            "--metrics-port",
-            "9464",
         ],
     )
 
-    assert result.exit_code == 0
-    assert "--webhook-url is ignored" in result.stdout
-    assert "--metrics-port is ignored" in result.stdout
+    assert "Invalid value for --webhook-url" in result.output
+    assert "--webhook-url can only be used with" in result.output
+    assert "--daemon." in result.output
 
 
 def test_cli_daemon_mode_wiring_and_interrupt(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         result = runner.invoke(app, [str(config), "--daemon", "-i", "5"])
 
     kwargs = FakeDaemon.instances[0].kwargs
@@ -262,7 +260,7 @@ def test_cli_daemon_mode_wiring_and_interrupt(tmp_path: Path) -> None:
 def test_cli_daemon_without_interval_does_not_override(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         runner.invoke(app, [str(config), "--daemon"])
 
     assert FakeDaemon.instances[0].kwargs["interval_override"] is None
@@ -271,7 +269,7 @@ def test_cli_daemon_without_interval_does_not_override(tmp_path: Path) -> None:
 def test_webhook_url_is_read_from_proofrun_env_var(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         runner.invoke(
             app,
             [str(config), "--daemon"],
@@ -287,7 +285,7 @@ def test_webhook_url_is_read_from_proofrun_env_var(tmp_path: Path) -> None:
 def test_webhook_flag_overrides_env_var(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         runner.invoke(
             app,
             [
@@ -307,7 +305,7 @@ def test_webhook_flag_overrides_env_var(tmp_path: Path) -> None:
 def test_old_proof_env_var_is_not_read(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         runner.invoke(
             app,
             [str(config), "--daemon"],
@@ -323,7 +321,7 @@ def test_old_proof_env_var_is_not_read(tmp_path: Path) -> None:
 def test_cli_daemon_runs_real_scenarios(tmp_path: Path, local_api: str) -> None:
     config = write_config(tmp_path, local_api)
 
-    with patch("proofrun.cli.commands.Daemon", StoppingDaemon):
+    with patch("proofrun.cli.runtime.Daemon", StoppingDaemon):
         result = runner.invoke(app, [str(config), "--daemon"])
 
     assert result.exit_code == 0
@@ -335,7 +333,7 @@ def test_cli_daemon_serves_metrics(tmp_path: Path, local_api: str) -> None:
     config = write_config(tmp_path, local_api)
     port = free_port()
 
-    with patch("proofrun.cli.commands.Daemon", StoppingDaemon):
+    with patch("proofrun.cli.runtime.Daemon", StoppingDaemon):
         result = runner.invoke(
             app,
             [str(config), "--daemon", "--metrics-port", str(port)],
@@ -351,7 +349,7 @@ def test_cli_passes_a_registry_to_the_daemon_when_metrics_are_enabled(
 ) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         runner.invoke(
             app,
             [str(config), "--daemon"],
@@ -364,7 +362,7 @@ def test_cli_passes_a_registry_to_the_daemon_when_metrics_are_enabled(
 def test_cli_warns_when_metrics_are_exposed(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         result = runner.invoke(
             app,
             [
@@ -388,7 +386,7 @@ def test_cli_reports_a_metrics_port_that_is_in_use(tmp_path: Path) -> None:
         blocker.listen()
         port = blocker.getsockname()[1]
 
-        with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+        with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
             result = runner.invoke(
                 app,
                 [str(config), "--daemon", "--metrics-port", str(port)],
@@ -535,7 +533,7 @@ def test_run_event_loop_falls_back_to_asyncio() -> None:
     async def main() -> int:
         return 7
 
-    with patch("proofrun.cli.commands._uvloop", None):
+    with patch("proofrun.cli.runtime._uvloop", None):
         assert run_event_loop(main()) == 7
 
 
@@ -551,13 +549,13 @@ def test_run_event_loop_uses_uvloop_when_available() -> None:
     async def main() -> int:
         return 0  # pragma: no cover - closed by fake_run before it executes
 
-    with patch("proofrun.cli.commands._uvloop", SimpleNamespace(run=fake_run)):
+    with patch("proofrun.cli.runtime._uvloop", SimpleNamespace(run=fake_run)):
         assert run_event_loop(main()) == 9
 
     assert calls == ["uvloop.run"]
 
 
-def test_cli_once_mode_warns_about_interval_and_metrics_host(
+def test_cli_once_mode_rejects_interval_option(
     tmp_path: Path,
     local_api: str,
 ) -> None:
@@ -565,12 +563,13 @@ def test_cli_once_mode_warns_about_interval_and_metrics_host(
 
     result = runner.invoke(
         app,
-        [str(config), "--interval", "30", "--metrics-host", "0.0.0.0"],
+        [str(config), "--interval", "30"],
     )
 
-    assert result.exit_code == 0
-    assert "--interval is ignored" in result.stdout
-    assert "--metrics-host is ignored" in result.stdout
+    assert result.exit_code == 2
+    assert "Invalid value for --interval" in result.output
+    assert "--interval can only be used with" in result.output
+    assert "--daemon." in result.output
 
 
 def test_cli_once_mode_without_daemon_options_prints_no_warning(
@@ -588,7 +587,7 @@ def test_daemon_refuses_to_start_with_an_invalid_configuration(
     config_file = tmp_path / "bad.yaml"
     config_file.write_text("version: '1.0'\nscenarios: nope\n", encoding="utf-8")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         result = runner.invoke(app, [str(config_file), "--daemon"])
 
     assert result.exit_code == 1
@@ -603,7 +602,7 @@ def test_an_invalid_configuration_does_not_open_the_metrics_port(
     config_file = tmp_path / "bad.yaml"
     config_file.write_text("version: '1.0'\nscenarios: []\n", encoding="utf-8")
 
-    with patch("proofrun.cli.commands.Daemon", FakeDaemon):
+    with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         result = runner.invoke(
             app,
             [str(config_file), "--daemon", "--metrics-port", str(free_port())],
@@ -671,7 +670,7 @@ async def test_daemon_mode_stops_cleanly_on_sigterm(
 ) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
 
-    with patch("proofrun.cli.commands.Daemon", WaitingDaemon):
+    with patch("proofrun.cli.runtime.Daemon", WaitingDaemon):
         task = asyncio.create_task(
             run_daemon_mode(config, None, None, "127.0.0.1", None)
         )
