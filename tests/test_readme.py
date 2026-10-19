@@ -1,3 +1,6 @@
+# Note: This test suite was generated and curated with the assistance of
+# AI/agent tooling.
+
 """Keep the README's YAML examples valid against the real schema."""
 
 from __future__ import annotations

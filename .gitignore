@@ -86,3 +86,5 @@ FUTURE.md
 # downloaded archives and patches
 *.zip
 *.patch
+
+*_S.md

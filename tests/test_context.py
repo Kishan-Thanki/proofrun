@@ -1,3 +1,6 @@
+# Note: This test suite was generated and curated with the assistance of
+# AI/agent tooling.
+
 """Verification suite for ExecutionContext."""
 
 from __future__ import annotations

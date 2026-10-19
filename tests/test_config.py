@@ -1,3 +1,6 @@
+# Note: This test suite was generated and curated with the assistance of
+# AI/agent tooling.
+
 """Exhaustive unit tests for declarative Pydantic configuration models."""
 
 from __future__ import annotations

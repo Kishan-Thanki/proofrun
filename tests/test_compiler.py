@@ -1,3 +1,6 @@
+# Note: This test suite was generated and curated with the assistance of
+# AI/agent tooling.
+
 """Exhaustive unit and integration tests for Proofrun configuration compiler."""
 
 from __future__ import annotations

@@ -1,3 +1,6 @@
+# Note: This test suite was generated and curated with the assistance of
+# AI/agent tooling.
+
 """Unit tests for per-scenario scheduling."""
 
 from __future__ import annotations

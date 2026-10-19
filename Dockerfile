@@ -18,7 +18,8 @@ FROM python:3.12.15-alpine
 
 COPY --from=build /opt/venv /opt/venv
 
-RUN apk upgrade --no-cache \
+RUN /opt/venv/bin/pip uninstall -y pip \
+    && apk upgrade --no-cache \
     && adduser -S -D -H -u 10001 -s /bin/false proofrun
 
 ENV PATH="/opt/venv/bin:${PATH}" \
