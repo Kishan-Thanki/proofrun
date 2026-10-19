@@ -41,6 +41,22 @@ from proofrun.runner.engine import ScenarioResult, StepResult
 runner = CliRunner()
 
 
+def cli_result_text(result: Any) -> str:
+    """Return CLI output across Click versions with separate output streams."""
+    parts = [result.output]
+
+    for stream_name in ("stdout", "stderr"):
+        try:
+            stream = getattr(result, stream_name, "")
+        except (AttributeError, ValueError):
+            continue
+
+        if stream and stream not in parts:
+            parts.append(stream)
+
+    return "\n".join(parts)
+
+
 def write_config(
     tmp_path: Path,
     base_url: str,
@@ -221,26 +237,6 @@ def test_cli_validate_cannot_be_combined_with_daemon(tmp_path: Path) -> None:
     result = runner.invoke(app, [str(config), "--validate", "--daemon"])
 
     assert result.exit_code == 2
-
-
-def test_cli_once_mode_rejects_daemon_only_options(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    config = write_config(tmp_path, local_api)
-
-    result = runner.invoke(
-        app,
-        [
-            str(config),
-            "--webhook-url",
-            "https://hooks.example.com/x",
-        ],
-    )
-
-    assert "Invalid value for --webhook-url" in result.output
-    assert "--webhook-url can only be used with" in result.output
-    assert "--daemon." in result.output
 
 
 def test_cli_daemon_mode_wiring_and_interrupt(tmp_path: Path) -> None:
@@ -558,23 +554,6 @@ def test_run_event_loop_uses_uvloop_when_available() -> None:
     assert calls == ["uvloop.run"]
 
 
-def test_cli_once_mode_rejects_interval_option(
-    tmp_path: Path,
-    local_api: str,
-) -> None:
-    config = write_config(tmp_path, local_api)
-
-    result = runner.invoke(
-        app,
-        [str(config), "--interval", "30"],
-    )
-
-    assert result.exit_code == 2
-    assert "Invalid value for --interval" in result.output
-    assert "--interval can only be used with" in result.output
-    assert "--daemon." in result.output
-
-
 def test_cli_once_mode_without_daemon_options_prints_no_warning(
     tmp_path: Path,
     local_api: str,
@@ -687,3 +666,64 @@ async def test_daemon_mode_stops_cleanly_on_sigterm(
 
     assert exit_code == 0
     assert "stopped by SIGTERM" in capsys.readouterr().out
+
+
+def test_cli_once_mode_rejects_daemon_only_options(
+    tmp_path: Path,
+    local_api: str,
+) -> None:
+    config = write_config(tmp_path, local_api)
+
+    result = runner.invoke(
+        app,
+        [
+            str(config),
+            "--webhook-url",
+            "https://hooks.example.com/x",
+        ],
+        standalone_mode=False,
+    )
+
+    assert result.exception is not None
+    assert result.exception.__class__.__name__ == "BadParameter"
+    assert "--webhook-url can only be used with --daemon." in str(result.exception)
+
+
+def test_cli_once_mode_rejects_interval_option(
+    tmp_path: Path,
+    local_api: str,
+) -> None:
+    config = write_config(tmp_path, local_api)
+
+    result = runner.invoke(
+        app,
+        [str(config), "--interval", "30"],
+        standalone_mode=False,
+    )
+
+    assert result.exception is not None
+    assert result.exception.__class__.__name__ == "BadParameter"
+    assert "--interval can only be used with --daemon." in str(result.exception)
+
+
+def test_metrics_host_requires_port_in_daemon_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PROOFRUN_METRICS_PORT", raising=False)
+    config = write_config(tmp_path, "http://127.0.0.1:9")
+
+    result = runner.invoke(
+        app,
+        [
+            str(config),
+            "--daemon",
+            "--metrics-host",
+            "0.0.0.0",
+        ],
+        standalone_mode=False,
+    )
+
+    assert result.exception is not None
+    assert result.exception.__class__.__name__ == "BadParameter"
+    assert "--metrics-host requires --metrics-port" in str(result.exception)

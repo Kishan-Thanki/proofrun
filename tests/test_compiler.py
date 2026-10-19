@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import fastjsonschema
 import pytest
@@ -916,3 +917,86 @@ scenarios:
 
     assert "scenarios.0.retriess" in message
     assert "Extra inputs are not permitted" in message
+
+
+def test_external_schema_must_be_object(tmp_path: Path) -> None:
+    config_path = tmp_path / "proofrun.yaml"
+    schema_path = tmp_path / "schema.json"
+
+    schema_path.write_text("[]", encoding="utf-8")
+    config_path.write_text(
+        """
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: test
+    steps:
+      - name: check
+        request:
+          method: GET
+          path: /
+        expect:
+          status: 200
+          schema: schema.json
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        ConfigCompilerError,
+        match="JSON Schema must be an object",
+    ):
+        load_and_compile_config(config_path)
+
+
+def test_rejects_unexpected_schema_data_type(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "proofrun.yaml"
+    config_path.write_text(
+        """
+version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: test
+    steps:
+      - name: check
+        request:
+          method: GET
+          path: /
+        expect:
+          status: 200
+          schema:
+            type: object
+""",
+        encoding="utf-8",
+    )
+
+    original_validate = ProofrunConfig.model_validate
+
+    def validate_then_corrupt_schema(
+        cls: type[ProofrunConfig],
+        data: Any,
+    ) -> ProofrunConfig:
+        config = original_validate(data)
+
+        # Deliberately simulate an invalid internal state for defensive coverage.
+        expect: Any = config.scenarios[0].steps[0].expect
+        expect.schema_data = []
+
+        return config
+
+    monkeypatch.setattr(
+        ProofrunConfig,
+        "model_validate",
+        classmethod(validate_then_corrupt_schema),
+    )
+
+    with pytest.raises(
+        ConfigCompilerError,
+        match="JSON Schema must be an object",
+    ):
+        load_and_compile_config(config_path)
