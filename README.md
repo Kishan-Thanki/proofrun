@@ -2,7 +2,7 @@
 
 # Proofrun
 
-**Write an API workflow in YAML. Run it locally, in CI, or as a monitor that only alerts when health changes.**
+**Test API responses and workflows—not just status codes. Run locally, in CI, or continuously.**
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![CI](https://github.com/Kishan-Thanki/proofrun/actions/workflows/ci.yaml/badge.svg)](https://github.com/Kishan-Thanki/proofrun/actions/workflows/ci.yaml)
@@ -14,35 +14,45 @@
 
 ---
 
-Most monitors tell you an endpoint returned `200`. Proofrun tells you whether the
-_journey_ works: log in, take the token from the response, use it on the next
-request, and check what comes back.
-
-When something breaks, you see exactly which step failed and why:
+An endpoint can return `200 OK` while its response is missing a field your application needs. And even when individual endpoints behave as expected, a workflow can fail when one request depends on data returned by another.
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/demo-fail.svg" alt="Proofrun reporting a failed step in a login-then-fetch scenario" width="860">
+  <img src="./docs/proofrun-thumbnail.svg" alt="Proofrun reporting a passing scenario" width="860">
 </div>
 
-And when everything is fine:
+**Proofrun lets you test both individual API responses and complete multi-step workflows** using readable YAML scenarios.
+
+- Check one request's status, latency, headers, and JSON response schema.
+- Extract values from a response and reuse them in later requests.
+- See which step failed and why when a scenario stops.
+- Reuse the same scenario locally, in CI, or continuously in daemon mode.
+
+<div align="center">
+  <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/demo-fail.svg" alt="Proofrun reporting a failed step in a multi-step scenario" width="860">
+</div>
+
+A passing run looks like this:
 
 <div align="center">
   <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/demo-pass.svg" alt="Proofrun reporting a passing scenario" width="860">
 </div>
 
-**YAML in. HTTP checks out. No database, queue, or external service required.**
+**YAML in. API checks out. No database, queue, or external monitoring service required.**
 
-- **One file describes the workflow.** Scenarios live in Git next to your code.
-- **Multi-step.** Values extracted from one response feed the next request.
-- **Secrets stay out of Git.** Reference environment variables with `${env.NAME}`.
-- **Runs anywhere.** The same file runs locally, in CI (exit code `0` / `1`), in Docker, or as a daemon under systemd.
-- **Quiet by design.** Retries and failure thresholds filter out blips, and you are alerted when health _changes_, not on every failed check.
-- **Observable.** Optional metrics endpoint in the text format, one series set per scenario.
+- **Single-request checks.** Validate status codes, response time, headers, and JSON Schema—even when an endpoint returns `200`.
+- **Multi-step workflows.** Extract values from a response and use them in subsequent paths, headers, query parameters, or JSON bodies.
+- **Configuration in Git.** Keep scenario definitions alongside your application code.
+- **Run it where you work.** Use the same file locally, in CI, in Docker, or as a daemon under systemd.
+- **Health-aware alerts.** Retries and failure/recovery thresholds help reduce noise; daemon webhooks fire on health-state transitions.
+- **Optional metrics.** Expose Prometheus-compatible metrics in daemon mode.
+
+API testing and synthetic monitoring tools already exist; Proofrun does not claim otherwise. Its focus is a lightweight, self-hosted CLI that covers both individual response validation and dependent API workflows without requiring a larger platform.
 
 ## Contents
 
 - [Quickstart](#quickstart-30-seconds)
-- [A realistic example](#a-realistic-example-log-in-then-use-the-token)
+- [Check a single API response](#check-a-single-api-response)
+- [Test a multi-step workflow](#test-a-multi-step-workflow)
 - [Config reference](#config-reference)
 - [Assertions](#what-you-can-assert)
 - [Variables and extraction](#variables-and-extraction)
@@ -64,16 +74,7 @@ And when everything is fine:
 ```bash
 pip install proofrun
 ```
-
-Or with pipx, or use the [Docker image](#docker):
-
-```bash
-pipx install proofrun
-```
-
-> Proofrun uses [`uvloop`](https://github.com/MagicStack/uvloop) for a faster event
-> loop where it is available. On Windows, where `uvloop` does not install, it
-> falls back to the standard `asyncio` loop. CI runs on Linux only.
+> Proofrun uses [`uvloop`](https://github.com/MagicStack/uvloop) where it is available. On platforms where `uvloop` does not install, it falls back to the standard `asyncio` event loop.
 
 **2. Create `health.yaml`:**
 
@@ -84,7 +85,7 @@ global:
   base_url: "https://jsonplaceholder.typicode.com"
 
 scenarios:
-  - name: "Public API is up"
+  - name: "Public API response matches its contract"
     steps:
       - name: "GET /posts/1"
         request:
@@ -93,6 +94,18 @@ scenarios:
         expect:
           status: 200
           max_latency_ms: 2000
+          schema:
+            type: object
+            required: [userId, id, title, body]
+            properties:
+              userId:
+                type: integer
+              id:
+                type: integer
+              title:
+                type: string
+              body:
+                type: string
 ```
 
 **3. Run it:**
@@ -101,172 +114,186 @@ scenarios:
 proofrun health.yaml
 ```
 
-That's it. Swap in your own `base_url` and paths. Add `--daemon` to keep it
-running.
+This checks one API response—not just its status code, but also whether its JSON structure matches the schema. Replace the example `base_url` and path with your own API. Add `--daemon` to run scenarios continuously.
 
-## A realistic example: log in, then use the token
+## Check a single API response
 
-This is the scenario from the screenshots above. It logs in, extracts the
-access token with JSONPath, sends it as a `Bearer` header on the next request,
-extracts the user id from _that_ response, and uses it in the URL of the third.
+You do not need a chain of requests to use Proofrun. A scenario can contain one step that checks a single endpoint.
 
 ```yaml
 version: "1.0"
 
 global:
-  base_url: "http://127.0.0.1:8099"
+  base_url: "https://api.example.com"
   timeout_seconds: 5
 
 scenarios:
-  - name: "Login and fetch orders"
+  - name: "Get order details"
     steps:
-      - name: "Log in"
-        request:
-          method: POST
-          path: /login
-          json:
-            email: "demo@example.com"
-            password: "demo-password"
-        expect:
-          status: 200
-          max_latency_ms: 1000
-        extract:
-          token: "$.access_token" # saved as ${token}
-
-      - name: "Fetch profile"
+      - name: "GET /orders/4821"
         request:
           method: GET
-          path: /me
-          headers:
-            Authorization: "Bearer ${token}" # used here
+          path: /orders/4821
         expect:
           status: 200
-        extract:
-          user_id: "$.id" # saved as ${user_id}
-
-      - name: "Fetch orders"
-        request:
-          method: GET
-          path: "/users/${user_id}/orders"
-          headers:
-            Authorization: "Bearer ${token}"
-        expect:
-          status: 200
-          schema: # JSON Schema validation
-            type: array
-            minItems: 1
+          max_latency_ms: 500
+          schema:
+            type: object
+            required: [id, status, total]
+            properties:
+              id:
+                type: integer
+              status:
+                type: string
+              total:
+                type: number
 ```
 
-Steps run in order and stop at the first failure, so the report points at the
-step that actually broke.
+This can catch a response that returns `200 OK` but no longer contains a required field or returns a field with the wrong type. JSON Schema only validates the constraints you define; it does not automatically prove every business rule.
 
-You can try this without any external service. The demo API lives in the
-repository (it is not part of the pip package), so clone it first:
+## Test a multi-step workflow
+
+A workflow becomes useful when one request depends on the result of another. For example, create an order, extract its ID, then retrieve that specific order.
+
+```yaml
+version: "1.0"
+
+global:
+  base_url: "https://api.example.com"
+  timeout_seconds: 5
+
+scenarios:
+  - name: "Create and retrieve an order"
+    steps:
+      - name: "Create order"
+        request:
+          method: POST
+          path: /orders
+          json:
+            product_id: 123
+            quantity: 1
+        expect:
+          status: 201
+          schema:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: integer
+        extract:
+          order_id: "$.id"
+
+      - name: "Retrieve the created order"
+        request:
+          method: GET
+          path: "/orders/${order_id}"
+        expect:
+          status: 200
+          schema:
+            type: object
+            required: [id, status]
+            properties:
+              id:
+                type: integer
+              status:
+                type: string
+```
+
+This is an illustrative example; adapt the paths, request body, and expected schemas to your API. Proofrun executes steps in order and stops at the first failure, so the report identifies the step where the scenario broke.
+
+For a runnable local example, clone the repository and start its demo API:
 
 ```bash
 git clone https://github.com/Kishan-Thanki/proofrun.git
 cd proofrun
 
-# terminal 1: start the demo API (standard library only)
+# Terminal 1: start the demo API (standard library only)
 python3 scenarios/server.py
 
-# terminal 2: run the scenario (passes, exit code 0)
+# Terminal 2: run the authentication example from the repository
+export DEMO_PASSWORD=demo-password
 proofrun scenarios/auth.yaml
 ```
 
-Now break it on purpose. Restart the demo API with `--break`, which makes
-`GET /me` return `500`, and run the same scenario again:
+To demonstrate a failure, stop the demo API and restart it with `--break`, which makes `GET /me` return `500`:
 
 ```bash
 python3 scenarios/server.py --break
-proofrun scenarios/auth.yaml # fails, exit code 1
+proofrun scenarios/auth.yaml  # expected scenario failure, exit code 1
 ```
 
-The demo API also serves the other scenarios in `scenarios/`, so all of them run
-offline: `profile.yaml` (header and schema checks), `chain.yaml` (chained
-extraction and built-in variables), `crud.yaml` (multi-step create, read,
-update, delete, plus a negative `404` check), and `resilient.yaml` (environment
-variables, retries, thresholds, and per-scenario intervals; run it with
-`DEMO_PASSWORD=demo-password`).
+The demo API also supports the other scenario files in `scenarios/`: `profile.yaml` (header and schema checks), `chain.yaml` (chained extraction and built-in variables), `crud.yaml` (create/read/update/delete and a negative `404` check), and `resilient.yaml` (environment variables, retries, thresholds, and per-scenario intervals; use `DEMO_PASSWORD=demo-password`).
 
 ## Config reference
 
 ```yaml
-version: "1.0" # required, only "1.0" is accepted
+version: "1.0" # required; only "1.0" is accepted
 
-global: # optional defaults for every scenario/step
+global: # optional defaults
   base_url: "https://api.example.com"
-  timeout_seconds: 10 # default 10, must be > 0
-  headers: # merged into every request
+  timeout_seconds: 10 # default 10; must be > 0
+  headers:
     Accept: "application/json"
-  interval_seconds: 60 # default 60
-  retries: 0 # default 0, max 10
-  retry_delay_seconds: 1 # default 1, 0 to 300
+  interval_seconds: 60 # default 60; daemon mode
+  retries: 0 # default 0; maximum 10
+  retry_delay_seconds: 1 # default 1; allowed range 0–300
   failure_threshold: 1 # default 1
   recovery_threshold: 1 # default 1
 
-scenarios: # required, list; names must be unique
+scenarios: # required; names must be unique
   - name: "Scenario name" # required
-    base_url: "https://staging.example.com" # optional, overrides global.base_url
-    interval_seconds: 60 # optional, daemon mode only
-    retries: 2 # optional, overrides the global value
+    base_url: "https://staging.example.com" # optional; overrides global.base_url
+    interval_seconds: 60 # optional; daemon mode
+    retries: 2 # optional; overrides global value
     retry_delay_seconds: 1 # optional
     failure_threshold: 3 # optional
     recovery_threshold: 2 # optional
-    steps: # required, run in order
+    steps: # required; run in order
       - name: "Step name" # required
         request:
-          method: GET # required: GET POST PUT PATCH DELETE HEAD OPTIONS
-          path: /things # required, joined onto base_url
+          method: GET # GET POST PUT PATCH DELETE HEAD OPTIONS
+          path: /things # required; joined onto base_url
           headers: {} # merged over global.headers
-          params: {} # query string
+          params: {} # query parameters
           json: {} # JSON request body
-          timeout: 5 # seconds, overrides global.timeout_seconds
+          timeout: 5 # seconds; overrides global.timeout_seconds
         expect: # required
-          status: 200 # required, int or list of ints
+          status: 200 # required; integer or list of integers
           max_latency_ms: 500
           headers: {}
-          schema: {} # inline JSON Schema, or a file path
-        extract: {} # variable name -> JSONPath
+          schema: {} # inline JSON Schema or path to a JSON Schema file
+        extract: {} # variable name -> JSONPath, from a JSON response
 ```
 
-Rules the compiler enforces when the file is loaded:
+Rules enforced when the configuration is loaded:
 
-- Every scenario needs a `base_url`, either its own or `global.base_url`.
-Otherwise loading fails.
-- `interval_seconds`, `retries`, `retry_delay_seconds`, `failure_threshold`, and
-  `recovery_threshold` fall back to the `global` value when a scenario does not
-  set them. A scenario value always wins, including `retries: 0`.
-- Step `headers` are merged over `global.headers`; the step wins on conflicts.
+- Every scenario needs `base_url`, either on the scenario or under `global`.
+- Scenario settings fall back to global values when omitted. An explicit scenario value wins, including `retries: 0`.
+- Step headers are merged over global headers; step values win on conflicts.
 - A step's `timeout` falls back to `global.timeout_seconds`.
-- A `schema` given as a path is resolved relative to the config file first,
-then relative to the current directory. It must be valid JSON.
-- Scenario names must be unique, because the name identifies the scenario in
-health tracking and metrics.
-- A file needs at least one scenario, and every scenario at least one step.
-- Unknown fields (for example a misspelled `max_latenc_ms`) and invalid values (bad
-method, `timeout <= 0`, wrong `version`, a schema that fails to compile) are rejected
-up front with an error that shows where the problem is. Nothing runs until the file
-is valid.
+- A schema file path is resolved relative to the YAML file first, then relative to the current working directory. The schema file must contain valid JSON Schema.
+- Scenario names must be unique because names identify scenarios in health tracking and metrics.
+- At least one scenario and at least one step per scenario are required.
+- Unknown fields and invalid values (such as a bad method, `timeout <= 0`, unsupported version, or schema that cannot be compiled) are rejected before requests run.
 
 ## What you can assert
 
-Each step's `expect` block supports:
+Each step's `expect` block supports the following:
 
-| Assertion        | Example                                         | Notes                                                                  |
-| ---------------- | ----------------------------------------------- | ---------------------------------------------------------------------- |
-| `status`         | `status: 200` or `status: [200, 201]`           | Required. One code, or a non-empty list, each from 100 to 599. A list passes if the status matches any entry. |
-| `max_latency_ms` | `max_latency_ms: 500`                           | Fails if the response took longer. Must be \> 0.                       |
-| `headers`        | `headers: { Content-Type: "application/json" }` | Names are case-insensitive, values must match **exactly**. Values of sensitive headers (names containing auth, cookie, token, secret, key, password, or session) are hidden in failure messages. |
-| `schema`         | inline JSON Schema, or a path to a file         | Validates the JSON response body. Fails if the body is not valid JSON. |
+| Assertion | Example | Behavior |
+| --- | --- | --- |
+| `status` | `status: 200` or `status: [200, 201]` | Required. A single code or non-empty list; each code must be 100–599. A list passes if any value matches. |
+| `max_latency_ms` | `max_latency_ms: 500` | Fails if the response exceeds the maximum. Must be positive. |
+| `headers` | `headers: { Content-Type: "application/json" }` | Header names are case-insensitive; values must match exactly. |
+| `schema` | Inline JSON Schema or file path | Validates the JSON response body; fails if the body is not valid JSON or does not satisfy the schema. |
 
-Checks run in this order and the step stops at the first one that fails:
-status, latency, headers, JSON parsing, schema, extraction.
+Checks occur in this order: status, latency, headers, JSON parsing when required, schema, and extraction. Execution stops at the first failed step.
+
+Sensitive-looking header values are hidden in relevant failure messages. This redaction is limited: do not assume response bodies, extracted variables, or arbitrary error text are comprehensively redacted.
 
 ## Variables and extraction
 
-A step can `extract` values from its JSON response with JSONPath. Later steps
-use them as `${name}`.
+A step can extract values from its JSON response using JSONPath. Later steps can reference those values as `${name}`.
 
 ```yaml
 extract:
@@ -274,39 +301,29 @@ extract:
   first_id: "$.items[0].id"
 ```
 
-- If a path matches several values, the **first** match is used.
-- If a path matches nothing, or the body is not JSON, the step fails.
-- `${...}` is interpolated in `path`, `headers`, `params`, and the `json`
-body (including dictionary keys). It is **not** interpolated in `expect`,
-`extract`, or `base_url`.
-- A value that is exactly one reference (`"${user_id}"`) keeps its type, so an
-integer stays an integer in a JSON body. Mixed text (`"user-${user_id}"`) is
-converted to a string.
-- Referencing a variable that was never extracted fails the step with
-`Missing required context variable`.
-- Variables are scoped to one scenario run. They are not shared between
-scenarios, between retries, or between daemon cycles.
-- Names starting with `env.` are reserved for [environment variables](#environment-variables-and-secrets)
-and cannot be used as extract names.
+- If a JSONPath expression matches several values, the first match is used.
+- If it matches nothing, or the response body is not JSON, the step fails.
+- Runtime variables can be interpolated in `path`, `headers`, `params`, and the `json` body, including dictionary keys. They are **not** interpolated in `expect`, `extract`, or `base_url`.
+- A value that is exactly one reference (`"${user_id}"`) retains its type, so an integer remains an integer in a JSON body. Mixed text such as `"user-${user_id}"` becomes a string.
+- Referencing a variable that has not been created fails the step with a missing-context-variable error.
+- Variables are scoped to one scenario attempt. They are not shared between scenarios, retries, or daemon cycles.
+- Names beginning with `env.` are reserved for environment references and cannot be extract names.
 
-Built-in dynamic values work anywhere `${...}` does:
+Built-in dynamic values work anywhere runtime interpolation is supported:
 
-| Variable            | Value                                 |
-| ------------------- | ------------------------------------- |
-| `${$uuid}`          | Random UUID4 string                   |
-| `${$timestamp}`     | Unix time in seconds                  |
-| `${$timestamp_ms}`  | Unix time in milliseconds             |
-| `${$iso_timestamp}` | UTC time, e.g. `2026-01-31T12:00:00Z` |
-| `${$random_int}`    | Random integer from 1000 to 9999      |
+| Variable | Value |
+| --- | --- |
+| `${$uuid}` | Random UUID4 string |
+| `${$timestamp}` | Unix time in seconds |
+| `${$timestamp_ms}` | Unix time in milliseconds |
+| `${$iso_timestamp}` | UTC timestamp, for example `2026-01-31T12:00:00Z` |
+| `${$random_int}` | Random integer from 1000 to 9999 |
 
-Each reference generates a new value, so two `${$uuid}` in one payload differ.
-To reuse one value, there is no built-in capture; extract it from a response
-instead.
+Each built-in reference generates a new value. To reuse one generated value, capture it in a variable through the workflow rather than referencing the built-in repeatedly.
 
 ## Environment variables and secrets
 
-Keep tokens and passwords out of the YAML. `${env.NAME}` is replaced by the value
-of the environment variable `NAME` when the file is loaded:
+Use `${env.NAME}` to supply configuration values from the process environment instead of hardcoding them in YAML. Environment references are resolved when the configuration is loaded.
 
 ```yaml
 global:
@@ -321,67 +338,52 @@ export API_TOKEN=...
 proofrun monitors/api.yaml
 ```
 
-- Works in any value (and dictionary key) of the file, including `base_url`.
-- The result is always text. `"${env.PORT}"` gives `"8080"`, not the number `8080`.
-- A missing variable is a configuration error that names the variable and where
-  it is used, for example `Environment variable 'API_TOKEN' is not set (referenced at global.headers.Authorization)`.
-  Nothing runs until it is fixed.
-- Variables are read when the file is loaded, not on every request. In daemon
-  mode, restart after changing the environment, or edit the file to reload it.
-- Resolved values are never printed in configuration errors, which show only the
-  field location and the problem. Proofrun does not otherwise redact response
-  data, so avoid asserting on secrets.
-- `${env.NAME}` is a separate namespace from run-time variables such as
-  `${token}`, so the two never clash.
+- Environment references work in YAML values and dictionary keys, including `base_url`.
+- The resolved value is text. For example, `${env.PORT}` produces a string such as `"8080"`, not the integer `8080`.
+- A missing variable is a configuration error that identifies the variable and its location; nothing runs until it is fixed.
+- Values are resolved when the file loads, not before every request. In daemon mode, changing an environment variable alone does not trigger reload; restart the process to apply environment changes.
+- Configuration errors avoid echoing resolved secret values. This does not guarantee universal output redaction: response bodies, extracted values, and other error text may still contain sensitive data.
+- `${env.NAME}` is distinct from runtime variables such as `${token}`.
 
 ## Retries and thresholds
 
-Two settings keep brief blips from turning into alerts. Both can be set under
-`global` or per scenario.
+Retries and health thresholds address different problems. Both can be configured globally or per scenario.
 
-**Retries** re-run a failed scenario before it counts as a failure:
+**Retries** rerun a failed scenario before its final result is counted:
 
 ```yaml
 scenarios:
-  - name: "Payments"
+  - name: "Read-only payment status check"
     retries: 2 # up to 3 attempts in total
     retry_delay_seconds: 2
 ```
 
-- The **whole scenario** is re-run, not just the failed step, because earlier
-  steps may have created state that later steps depend on.
-- Every attempt starts with a fresh set of variables and a new HTTP client.
-- Any failure is retried: connection errors, timeouts, and failed assertions.
-- Only the final result counts. Output shows `Attempts: N` when more than one
-  attempt was needed.
-- Retries work in run-once mode too, which makes CI checks less flaky.
+- The **whole scenario** is retried, not only the failed step.
+- Every attempt gets a fresh variable context and HTTP client.
+- Failed assertions, timeouts, connection errors, and other step failures can trigger a retry.
+- Only the final result counts toward health. Output reports the number of attempts when more than one was needed.
+- Retries also apply in run-once mode, including CI.
 
-> **Retries repeat side effects.** A scenario that creates an order and then fails while
-> fetching it will create a second order on the retry. Use `retries` for read-only
-> checks. For scenarios that create or change data, set `retries: 0` and rely on
-> `failure_threshold` instead.
+> **Retries can repeat side effects.** If a scenario creates an order and later fails, a retry can create another order. Prefer retries for read-only checks or APIs designed for safe repetition. For workflows with non-idempotent side effects, use `retries: 0` unless repeat execution is safe.
 
-**Thresholds** work across daemon cycles and count _consecutive_ runs:
+**Failure and recovery thresholds** count consecutive final scenario outcomes in daemon mode:
 
 ```yaml
 scenarios:
   - name: "Public API"
-    failure_threshold: 3 # FAILING after 3 failed runs in a row
-    recovery_threshold: 2 # HEALTHY again after 2 passing runs in a row
+    failure_threshold: 3 # enter FAILING after 3 failed runs in a row
+    recovery_threshold: 2 # return to HEALTHY after 2 passing runs in a row
 ```
 
 ```text
-Run 1: fail -> still HEALTHY (1 of 3)
-Run 2: fail -> still HEALTHY (2 of 3)
-Run 3: fail -> FAILING, alert sent
+Run 1: fail -> still not FAILING (1 of 3)
+Run 2: fail -> still not FAILING (2 of 3)
+Run 3: fail -> FAILING; failure alert sent
 Run 4: pass -> still FAILING (1 of 2)
-Run 5: pass -> HEALTHY, recovery alert sent
+Run 5: pass -> HEALTHY; recovery alert sent
 ```
 
-A pass resets the failure count and a failure resets the pass count. A scenario
-that has never been seen before is `UNKNOWN`: it becomes `HEALTHY` on its first
-pass, and `FAILING` after `failure_threshold` failed runs. The defaults of `1`
-and `1` alert on the first failure and on the first recovery.
+A pass resets the failure count; a failure resets the pass count. A new scenario begins in `UNKNOWN`. With default thresholds of `1` and `1`, its first failed run transitions to `FAILING`; its first successful run transitions to `HEALTHY` without a notification. A recovery webhook is sent for `FAILING -> HEALTHY`.
 
 ## Run it continuously
 
@@ -389,113 +391,85 @@ and `1` alert on the first failure and on the first recovery.
 proofrun monitors/api.yaml --daemon
 ```
 
-In daemon mode Proofrun runs your scenarios on a loop and tracks each one as
-`HEALTHY` or `FAILING`.
+In daemon mode, Proofrun schedules scenarios, tracks health, can send webhook alerts, and can expose metrics.
 
-- **Every scenario has its own schedule.** `interval_seconds` is per scenario,
-  so a login check can run every 10 seconds and a report check every 5 minutes.
-  All scenarios start immediately when the daemon starts.
-- **A slow scenario never delays another**, and a scenario is never started while
-  its previous run is still in progress, so runs of the same scenario do not
-  overlap. If a run takes longer than its interval, the next one starts as soon
-  as it finishes.
-- **Jittered schedule.** Each interval varies by ±15% so checks don't all land on
-  the same second.
-- **Alerts on change, not on repetition.** A webhook fires when a scenario starts
-  failing and again when it recovers. A scenario that stays down does not
-  re-alert on every cycle.
-- **Edit configs live.** Changes to the YAML are picked up within about a second,
-  without a restart. Added scenarios start immediately and removed ones stop. If
-  an edit is invalid, Proofrun keeps running the last working configuration and
-  prints the error once.
-- **Starts only with a valid config.** If the file is invalid when the daemon
-  starts, it prints the error and exits with code 1 instead of idling.
-- **Stops cleanly.** Ctrl+C or `SIGTERM` (what `systemctl stop` and `docker stop`
-  send) cancels running scenarios, closes the metrics port, and exits with code 0.
-- **Isolated runs.** Every run uses its own HTTP client, so cookies and
-  connections are never shared between scenarios that run at the same time.
+- **Per-scenario schedules.** Each scenario can have its own `interval_seconds`; all scenarios start immediately when the daemon starts.
+- **No overlapping run of the same scenario.** A scenario is not started while its previous run is in progress. Other scenarios can run independently.
+- **Jitter.** Scheduled intervals vary by approximately ±15% to avoid synchronized bursts.
+- **Transition-based notifications.** A scenario that remains failing does not send the same alert every cycle. A recovery alert is sent when the health state returns to `HEALTHY`.
+- **Live config reload.** Changes to the main YAML file are picked up without restarting. Added scenarios start and removed scenarios stop. If an edit is invalid, Proofrun keeps the last-known-good configuration and reports the error. A config that is invalid at startup prevents the daemon from starting.
+- **Reload limits.** Changes to environment variables or a referenced schema file alone do not trigger reload; restart or change the main config as appropriate.
+- **Clean shutdown.** Ctrl+C or `SIGTERM` cancels running work and closes the metrics server.
+- **Isolated runs.** Each scenario attempt uses its own HTTP client and variable context. Cookies may persist across sequential steps in that attempt, but are not shared between separate runs.
 
-`--interval N` runs every scenario every N seconds and replaces each scenario's
-`interval_seconds`.
+`--interval N` overrides each scenario's configured interval in daemon mode. It must be at least one second.
 
-Send alerts to any HTTP endpoint:
+Send alerts to an HTTP endpoint:
 
 ```bash
-proofrun monitors/api.yaml --daemon --webhook-url https://<your_domain>/hooks/proofrun
+proofrun monitors/api.yaml --daemon --webhook-url https://example.com/hooks/proofrun
 
-# or
-
-export PROOFRUN_WEBHOOK_URL=https://<your_domain>/hooks/proofrun
+# Or use the environment variable:
+export PROOFRUN_WEBHOOK_URL=https://example.com/hooks/proofrun
 proofrun monitors/api.yaml --daemon
 ```
 
-The webhook receives plain JSON via `POST`:
+The webhook receives JSON via `POST`, for example:
 
 ```json
 {
   "event": "scenario_failed",
-  "scenario": "Login and fetch orders",
+  "scenario": "Create and retrieve an order",
   "previous_status": "HEALTHY",
   "status": "FAILING",
-  "details": "- Fetch profile: Status code mismatch: expected one of [200], got 500"
+  "details": "- Retrieve the created order: Status code mismatch: expected one of [200], got 500"
 }
 ```
 
-`event` is `scenario_failed` or `scenario_recovered`. On recovery, `details` is
-`"All steps passing."`.
+`event` is `scenario_failed` or `scenario_recovered`. On recovery, `details` is `"All steps passing."`.
 
-**When alerts fire** (with the default thresholds of 1):
+| Transition | Notification |
+| --- | --- |
+| `UNKNOWN -> HEALTHY` | None |
+| `UNKNOWN -> FAILING` | `scenario_failed` |
+| `HEALTHY -> FAILING` | `scenario_failed` |
+| `FAILING -> FAILING` | None |
+| `FAILING -> HEALTHY` | `scenario_recovered` |
 
-| Transition            | Alert                                            |
-| --------------------- | ------------------------------------------------ |
-| first run → passing   | none                                             |
-| first run → failing   | `scenario_failed` (`previous_status: "UNKNOWN"`) |
-| `HEALTHY` → `FAILING` | `scenario_failed`                                |
-| `FAILING` → `FAILING` | none                                             |
-| `FAILING` → `HEALTHY` | `scenario_recovered`                             |
-
-With higher thresholds the same transitions apply, they just happen later.
-Webhook delivery has a 5 second timeout. A failed delivery is printed with its
-reason (an HTTP status, a timeout, or a connection error) and **not retried**. The
-webhook URL is never printed, because it often contains a secret.
+Transitions happen after the configured thresholds are met. Webhook delivery has a five-second timeout. A failed delivery is logged and is not retried; the webhook URL is not printed in delivery errors.
 
 ## Metrics
 
-Proofrun can serve per-scenario metrics over HTTP in the text format, so any
-scraper that reads it works.
+Proofrun can serve per-scenario metrics over HTTP in Prometheus text exposition format:
 
 ```bash
 proofrun monitors/api.yaml --daemon --metrics-port 9464
 curl http://127.0.0.1:9464/metrics
 ```
 
-| Metric                                             | Type    | Meaning                                                         |
-| -------------------------------------------------- | ------- | --------------------------------------------------------------- |
-| `proofrun_scenario_up`                             | gauge   | `1` when `HEALTHY`, `0` when `FAILING`. Absent while `UNKNOWN`. |
-| `proofrun_scenario_runs_total`                     | counter | Scenario runs, counted after retries.                           |
-| `proofrun_scenario_failures_total`                 | counter | Runs that failed after all retries.                             |
-| `proofrun_scenario_duration_seconds`               | gauge   | Duration of the last run.                                       |
-| `proofrun_scenario_last_success_timestamp_seconds` | gauge   | Unix time of the last passing run.                              |
-| `proofrun_scenario_last_failure_timestamp_seconds` | gauge   | Unix time of the last failed run.                               |
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `proofrun_scenario_up` | Gauge | `1` when `HEALTHY`, `0` when `FAILING`; absent while `UNKNOWN`. |
+| `proofrun_scenario_runs_total` | Counter | Scenario runs counted after retries. |
+| `proofrun_scenario_failures_total` | Counter | Scenario runs that failed after retries were exhausted. |
+| `proofrun_scenario_duration_seconds` | Gauge | Duration of the most recent scenario run. |
+| `proofrun_scenario_last_success_timestamp_seconds` | Gauge | Unix timestamp of the last passing run. |
+| `proofrun_scenario_last_failure_timestamp_seconds` | Gauge | Unix timestamp of the last failing run. |
+
+Example:
 
 ```text
-proofrun_scenario_up{scenario="Login and fetch orders"} 1
-proofrun_scenario_runs_total{scenario="Login and fetch orders"} 42
+proofrun_scenario_up{scenario="Create and retrieve an order"} 1
+proofrun_scenario_runs_total{scenario="Create and retrieve an order"} 42
 ```
 
-- The only label is `scenario`. URLs, error messages, and response data are never
-  used as labels.
-- Series of scenarios removed from the config are dropped on the next config
-  reload. Counters reset when the daemon restarts.
-- `GET /health` returns `200 ok` while the Proofrun process is running. It says
-  nothing about whether your scenarios are healthy; use `proofrun_scenario_up`
-  for that.
-- The server binds to **`127.0.0.1` by default** and has **no authentication or
-  TLS**. `--metrics-host 0.0.0.0` exposes it to the network and prints a warning;
-  only do that behind a firewall, a reverse proxy, or a container network.
-- Example alert rule: `proofrun_scenario_up == 0`.
+- The only label is `scenario`; URLs, error messages, and response bodies are not labels.
+- Series for removed scenarios are dropped on configuration reload. Counters and health state reset when the daemon restarts.
+- `GET /health` reports whether the Proofrun metrics server is alive; it does **not** indicate whether monitored scenarios are healthy. Use `proofrun_scenario_up` for scenario health.
+- The server binds to `127.0.0.1` by default and has no authentication or TLS. Binding to `0.0.0.0` exposes it on the container/network interface; protect it with a firewall, reverse proxy, or trusted network.
+- An example alert condition is `proofrun_scenario_up == 0`.
 
-Metrics are only available in daemon mode.
+Metrics are available only in daemon mode. Duration is scenario-level, not a separate per-step latency histogram.
 
 ## Validate a config
 
@@ -503,24 +477,20 @@ Metrics are only available in daemon mode.
 proofrun monitors/api.yaml --validate
 ```
 
-Loads the file, resolves `${env.NAME}` references, validates everything, and
-compiles JSON schemas, **without sending a single request**. It prints the
-scenarios with their effective settings and exits `0`, or prints the problem and
-exits `1`. Use it in pre-commit hooks and CI. Set the environment variables the
-config references, because a missing one is an error.
+This loads the file, resolves `${env.NAME}` references, validates the configuration, and compiles JSON Schemas **without sending requests**. It exits `0` when valid and `1` when a configuration load or validation error occurs. Set environment variables referenced by the config; a missing variable is an error.
 
 ## Use it in CI
 
-Proofrun exits with `0` when every scenario passes and `1` when any fails, so it
-works as a smoke test or a scheduled check. For example, with GitHub Actions:
+Proofrun returns `0` when all scenarios pass and `1` when a scenario fails or the configuration cannot be loaded/validated. CLI usage errors return `2`.
+
+Example GitHub Actions workflow:
 
 ```yaml
-name: API check
+name: API checks
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
+  pull_request:
 
 jobs:
   proofrun:
@@ -539,57 +509,50 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 ```
 
-A failing check fails the workflow run, and GitHub notifies you the way it
-notifies you about any failed workflow. Add `retries` to a scenario to keep
-one-off network errors from failing the build.
+Run against a test or staging API, and keep credentials in your CI secret store. A failed scenario fails the job. Use retries judiciously, particularly for workflows that have side effects.
 
-Exit codes in run-once mode:
+Run-once exit codes:
 
-| Code | Meaning                                                           |
-| ---- | ----------------------------------------------------------------- |
-| `0`  | All scenarios passed (or `--validate` found no problems)          |
-| `1`  | A scenario failed, or the config could not be loaded or validated |
-| `2`  | Bad command-line usage, such as a config path that does not exist |
+| Code | Meaning |
+| --- | --- |
+| `0` | All scenarios passed, or config validation succeeded. |
+| `1` | A scenario failed or config loading/validation failed. |
+| `2` | CLI usage error, such as a config path that does not exist. |
 
 ## Docker
 
-Images are published to GitHub Container Registry for `linux/amd64` and
-`linux/arm64`:
+Images are published to GitHub Container Registry:
 
 ```bash
 docker run --rm ghcr.io/kishan-thanki/proofrun --version
 
-# run once
-docker run --rm -v "$PWD/monitors:/monitors:ro" \
+# Run once
+docker run --rm \
+  -v "$PWD/monitors:/monitors:ro" \
   -e API_TOKEN \
   ghcr.io/kishan-thanki/proofrun /monitors/api.yaml
 
-# run as a monitor, with metrics published on the host's loopback only
+# Run as a monitor; publish metrics on host loopback only
 docker run -d --name proofrun --restart unless-stopped \
   -v "$PWD/monitors:/monitors:ro" \
   -e API_TOKEN \
   -e PROOFRUN_WEBHOOK_URL \
-  -e PROOFRUN_METRICS_PORT=9464 -e PROOFRUN_METRICS_HOST=0.0.0.0 \
+  -e PROOFRUN_METRICS_PORT=9464 \
+  -e PROOFRUN_METRICS_HOST=0.0.0.0 \
   -p 127.0.0.1:9464:9464 \
   ghcr.io/kishan-thanki/proofrun /monitors/api.yaml --daemon
 ```
 
-- Tags: `latest`, the exact version (`0.2.0`), and `major.minor` (`0.2`). The image is
-  based on Alpine and is small.
-- `docker stop` shuts the container down cleanly within a second or two.
-- The container runs as an unprivileged user (uid `10001`). Mount your configs
-  read-only.
-- Inside a container the metrics server has to listen on `0.0.0.0` to be
-  reachable; publish the port on `127.0.0.1` as above unless you protect it.
-- The image has no built-in health check because metrics are optional. With
-  `--metrics-port`, use `GET /health`. See [`deploy/docker-compose.yaml`](https://github.com/Kishan-Thanki/proofrun/blob/main/deploy/docker-compose.yaml) for a
-  complete example with a health check, a read-only filesystem, and dropped
-  capabilities.
+- The image runs as an unprivileged user (UID `10001`). Mount config files read-only.
+- Inside a container, the metrics server must listen on `0.0.0.0` to be reachable through a published port. Publishing to `127.0.0.1` on the host limits exposure.
+- Metrics are optional, so the image does not require the metrics endpoint for basic run-once use.
+- See [`deploy/docker-compose.yaml`](https://github.com/Kishan-Thanki/proofrun/blob/main/deploy/docker-compose.yaml) for a Compose example using a read-only filesystem, dropped capabilities, and a health check.
 
 ## systemd
 
-Ready-to-use files live in [`deploy/systemd/`](https://github.com/Kishan-Thanki/proofrun/tree/main/deploy/systemd): a hardened unit
-(`proofrun.service`) and an environment file template (`proofrun.env.example`).
+Ready-to-use files live in [`deploy/systemd/`](https://github.com/Kishan-Thanki/proofrun/tree/main/deploy/systemd): a service unit and an environment file template.
+
+A typical installation looks like this; adjust ownership and paths to your host:
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin proofrun
@@ -601,70 +564,53 @@ sudo install -m 600 deploy/systemd/proofrun.env.example /etc/proofrun/proofrun.e
 sudo cp deploy/systemd/proofrun.service /etc/systemd/system/proofrun.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now proofrun
-
 journalctl -u proofrun -f
 ```
 
-Secrets go in `/etc/proofrun/proofrun.env` (referenced from the YAML as
-`${env.NAME}`), not in the unit or the config. The unit restarts the service on
-failure and runs it as an unprivileged user with no capabilities and a read-only
-view of the filesystem. Edits to `monitors.yaml` are picked up while it runs;
-changes to the environment file need `sudo systemctl restart proofrun`. Run
-`/opt/proofrun/bin/proofrun /etc/proofrun/monitors.yaml --validate` before
-restarting, and review the unit's sandboxing with
-`systemd-analyze security proofrun`.
+Put credentials in `/etc/proofrun/proofrun.env`, not directly in the unit or scenario YAML. Review the example unit and confirm its paths, user, and environment-file settings for your host. Changing the environment file requires a service restart; edits to the main YAML are picked up by the running daemon.
 
 ## CLI
 
 ```bash
-proofrun <config.yaml>                 # run once and exit (default)
+proofrun <config.yaml>                 # run once (default)
 proofrun <config.yaml> --once          # same, explicit
-proofrun <config.yaml> --validate      # check the config, send no requests
+proofrun <config.yaml> --validate      # validate config; send no requests
 proofrun <config.yaml> --daemon        # run continuously
-proofrun <config.yaml> --daemon -i 30  # every scenario every 30 seconds
+proofrun <config.yaml> --daemon -i 30  # override all scenario intervals
 proofrun <config.yaml> --daemon --webhook-url <url>
 proofrun <config.yaml> --daemon --metrics-port 9464
 proofrun --version                     # or -v
-python -m proofrun <config.yaml>       # equivalent to the proofrun command
+python -m proofrun <config.yaml>       # equivalent module entry point
 ```
 
-| Option                | Description                                                                                 |
-| --------------------- | ------------------------------------------------------------------------------------------- |
-| `--once` / `--daemon` | Run once and exit (default), or loop until stopped with Ctrl+C.                             |
-| `--validate`          | Check the configuration and exit. Cannot be combined with `--daemon`.                       |
-| `--interval`, `-i`    | Daemon: run every scenario every N seconds, replacing each `interval_seconds`. Must be ≥ 1. |
-| `--webhook-url`       | Daemon: alert destination. Also read from `PROOFRUN_WEBHOOK_URL`.                           |
-| `--metrics-port`      | Daemon: serve metrics on this port (1 to 65535). Also `PROOFRUN_METRICS_PORT`.             |
-| `--metrics-host`      | Address for the metrics server. Default `127.0.0.1`. Also `PROOFRUN_METRICS_HOST`.          |
-| `--version`, `-v`     | Print the version and exit.                                                                 |
-| `--install-completion`, `--show-completion` | Install, or print, shell completion for `proofrun`.                  |
+| Option | Description |
+| --- | --- |
+| `--once` / `--daemon` | Run once and exit (default), or run continuously until stopped. |
+| `--validate` | Validate configuration without sending requests; cannot be combined with `--daemon`. |
+| `--interval`, `-i` | Daemon-only: replace each scenario interval with this number of seconds. Must be at least `1`. |
+| `--webhook-url` | Daemon-only webhook destination; also configurable with `PROOFRUN_WEBHOOK_URL`. |
+| `--metrics-port` | Daemon-only metrics port (`1`–`65535`); also configurable with `PROOFRUN_METRICS_PORT`. |
+| `--metrics-host` | Daemon-only metrics bind address; defaults to `127.0.0.1`. Also configurable with `PROOFRUN_METRICS_HOST`. |
+| `--version`, `-v` | Print version and exit. |
+| `--install-completion`, `--show-completion` | Install or print shell completion. |
 
-Daemon-only options (`--interval`, `--webhook-url`, `--metrics-port`, `--metrics-host`)
-given in run-once mode are ignored, with a warning.
+Daemon-only options explicitly supplied on the command line in run-once mode are rejected with a clear error. Setting their environment variables alone does not force daemon mode or prevent a run-once check.
 
 ## Behavior notes and limits
 
-- **Failures stop the scenario.** Remaining steps are not run, and the report
-shows only the steps that ran.
-- **Cookies persist within a scenario run** (a session cookie from a login step is
-sent on later steps) and are never shared with another run or scenario.
-- **State is in memory.** Restarting the daemon resets health tracking, so a
-scenario that is already down alerts again after a restart.
-- **Webhooks and metrics are daemon-only.** Run-once mode does not track state.
-- **JSON only for body checks.** `schema` and `extract` require a JSON response.
-Status, latency, and header checks work with any response.
-- **No connection reuse between runs.** Each run opens its own connections, which
-  is closer to what a real client experiences and keeps runs isolated.
-- **Intervals are whole seconds**, at least 1.
-- **Webhook delivery is not retried.** A failure is printed and the daemon keeps
-  running.
-- **Failure messages can contain response data.** Only the values of sensitive headers
-  are hidden. Do not assert on secrets, and treat console output and alert payloads as
-  non-confidential.
-- **One config file per process.** Run several daemons for several files.
-- **Configuration errors are shown on the console.** They are not sent as alerts.
+- **A failed step stops the scenario.** Remaining steps do not run; the report identifies the steps that ran and the failure.
+- **Single-request checks are supported.** A scenario can contain one step for status, latency, header, and schema validation.
+- **Body extraction and schema validation require JSON.** Status, latency, and header checks can be used without parsing a JSON body.
+- **Cookies persist within one scenario attempt** so a session established in an earlier step can be used by a later step. Cookies and clients are not shared between independent runs.
+- **Retries rerun the entire scenario.** Side effects may repeat; set retries according to the safety of the workflow.
+- **State is in memory.** Restarting the daemon resets health tracking and metrics, so a failing scenario may alert again after restart.
+- **Webhooks and metrics are daemon-only.** Run-once mode reports results and exit status but does not track health transitions or serve metrics.
+- **Webhook delivery is not retried.** A delivery failure is logged and the daemon continues.
+- **Secret redaction is limited.** Sensitive-looking response header values are masked in relevant failures, but arbitrary response bodies, extracted variables, and error messages are not comprehensively redacted. Treat output and alert payloads as potentially non-confidential.
+- **Only the main YAML file is watched for reload.** Changes to referenced schema files or environment variables alone do not trigger a reload.
+- **The metrics `/health` endpoint is process health, not target API health.** Use `proofrun_scenario_up` to inspect scenario state.
+- **One config file per process.** Run separate processes if you need to monitor separate files.
 
 ## License
 
-Proofrun is licensed under the [MIT License](https://github.com/Kishan-Thanki/proofrun/blob/main/LICENSE).
-See the [changelog](https://github.com/Kishan-Thanki/proofrun/blob/main/CHANGELOG.md) for what changed in each release.
+Proofrun is licensed under the [MIT License](https://github.com/Kishan-Thanki/proofrun/blob/main/LICENSE). See the [changelog](https://github.com/Kishan-Thanki/proofrun/blob/main/CHANGELOG.md) for release history.

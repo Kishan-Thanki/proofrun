@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1648" height="928" viewBox="0 0 1648 928" role="img" aria-labelledby="title desc">
+  <title id="title">Proofrun — Test API behavior beyond status codes</title>
+  <desc id="desc">Proofrun promotional thumbnail with a text-only wordmark, emphasizing API behavior and assertion testing for individual requests as well as multi-step workflows. Right side shows illustrative passing and failing CLI output.</desc>
+  <defs>
+    <style>
+      .sans { font-family: Inter, "Helvetica Neue", Helvetica, Arial, sans-serif; }
+      .mono { font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", Menlo, Consolas, monospace; }
+    </style>
+    <filter id="softShadow" x="-6%" y="-8%" width="112%" height="120%">
+      <feDropShadow dx="0" dy="9" stdDeviation="12" flood-color="#1A222C" flood-opacity="0.14"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1648" height="928" fill="#E9EDF1"/>
+  <circle cx="600" cy="140" r="250" fill="#DCE4EB" opacity="0.3"/>
+  <circle cx="1560" cy="900" r="220" fill="#DCE4EB" opacity="0.25"/>
+
+  <!-- Left column: typography only until the Proofrun logo is finalized -->
+  <g class="sans">
+    <text x="100" y="119" font-size="31" font-weight="750" fill="#1A222C" letter-spacing="-0.8">Proofrun</text>
+
+    <circle cx="104" cy="174" r="3.5" fill="#2E8BB8"/>
+    <text x="118" y="179" class="mono" font-size="11" font-weight="700" fill="#6B7685" letter-spacing="2.0">API LOGIC TESTING</text>
+
+    <text x="100" y="292" font-size="52" font-weight="800" fill="#1A222C" letter-spacing="-1.8">Test API logic</text>
+    <text x="100" y="356" font-size="52" font-weight="800" fill="#2E8BB8" letter-spacing="-1.8">beyond status codes</text>
+    <rect x="100" y="383" width="86" height="3" rx="1.5" fill="#2E8BB8" opacity="0.8"/>
+
+    <rect x="100" y="420" width="2" height="77" fill="#1A222C" opacity="0.20"/>
+    <text x="118" y="435" font-size="17" fill="#5C6674">Validate API behavior, not just availability.</text>
+    <text x="118" y="460" font-size="17" fill="#5C6674">Check status, latency, headers and response</text>
+    <text x="118" y="485" font-size="17" fill="#5C6674">schema, then chain requests when needed.</text>
+
+    <text x="100" y="556" class="mono" font-size="12" font-weight="700" fill="#2E8BB8" letter-spacing="1">01</text>
+    <text x="136" y="556" font-size="15" font-weight="600" fill="#3D4655">Validate individual API responses and contracts</text>
+
+    <text x="100" y="596" class="mono" font-size="12" font-weight="700" fill="#2E8BB8" letter-spacing="1">02</text>
+    <text x="136" y="596" font-size="15" font-weight="600" fill="#3D4655">Extract values and reuse them across requests</text>
+
+    <text x="100" y="636" class="mono" font-size="12" font-weight="700" fill="#2E8BB8" letter-spacing="1">03</text>
+    <text x="136" y="636" font-size="15" font-weight="600" fill="#3D4655">Run locally, in CI, or as a daemon</text>
+
+    <line x1="100" y1="723" x2="160" y2="723" stroke="#1A222C" stroke-opacity="0.25"/>
+    <text x="100" y="752" class="mono" font-size="12" fill="#7A8494" letter-spacing="0.2">single-request checks · multi-step workflows</text>
+    <text x="100" y="788" class="mono" font-size="11" fill="#7A8494">github.com/Kishan-Thanki/proofrun</text>
+  </g>
+
+  <!-- Passing run label -->
+  <g class="mono">
+    <circle cx="708" cy="135" r="4" fill="#687D2D"/>
+    <text x="722" y="140" font-size="11" font-weight="700" fill="#54681E" letter-spacing="2.2">PASSING RUN</text>
+    <line x1="860" y1="136" x2="1591" y2="136" stroke="#54681E" stroke-opacity="0.35"/>
+  </g>
+
+  <!-- Passing CLI panel: mirrors Proofrun's Rich table and summary layout -->
+  <g transform="translate(700, 157) scale(0.72)" filter="url(#softShadow)">
+    <rect x="1" y="1" width="1236" height="389.6" rx="8" fill="#292929"/>
+    <circle cx="26" cy="22" r="7" fill="#FF5F57"/>
+    <circle cx="48" cy="22" r="7" fill="#FEBC2E"/>
+    <circle cx="70" cy="22" r="7" fill="#28C840"/>
+    <text x="618" y="27" class="sans" font-size="18" font-weight="700" fill="#C5C8C6" text-anchor="middle">proofrun</text>
+    <g transform="translate(9, 41)" class="mono" font-size="20">
+      <text x="0" y="20" fill="#68A0B3" font-weight="700">$</text>
+      <text x="12.2" y="20" fill="#C5C8C6"> proofrun scenarios/crud.yaml</text>
+      <text x="440" y="68.8" fill="#68A0B3" font-weight="700">Scenario:</text>
+      <text x="550" y="68.8" fill="#C5C8C6" font-weight="700">Create and verify resource</text>
+      <g fill="none" stroke="#C5C8C6" stroke-width="1.6">
+        <rect x="0" y="83" width="1207.8" height="156.6"/>
+        <line x1="378.2" y1="83" x2="378.2" y2="239.6"/>
+        <line x1="549" y1="83" x2="549" y2="239.6"/>
+        <line x1="719.8" y1="83" x2="719.8" y2="239.6"/>
+        <line x1="915" y1="83" x2="915" y2="239.6"/>
+        <line x1="0" y1="138" x2="1207.8" y2="138"/>
+      </g>
+      <g fill="#98729F" font-weight="700" font-size="19">
+        <text x="20" y="117.6">Step Name</text>
+        <text x="463.6" y="117.6" text-anchor="middle">Status</text>
+        <text x="634.4" y="117.6" text-anchor="middle">HTTP Code</text>
+        <text x="817.4" y="117.6" text-anchor="middle">Latency</text>
+        <text x="935" y="117.6">Error Details</text>
+      </g>
+      <g font-size="19">
+        <text x="20" y="166.4" fill="#868887">Create resource</text>
+        <text x="463.6" y="166.4" fill="#98A84B" font-weight="700" text-anchor="middle">PASS</text>
+        <text x="699.8" y="166.4" fill="#98A84B" text-anchor="end">201</text>
+        <text x="895" y="166.4" fill="#C5C8C6" text-anchor="end">18.31 ms</text>
+        <text x="935" y="166.4" fill="#CC555A">-</text>
+        <text x="20" y="190.8" fill="#868887">Fetch resource</text>
+        <text x="463.6" y="190.8" fill="#98A84B" font-weight="700" text-anchor="middle">PASS</text>
+        <text x="699.8" y="190.8" fill="#98A84B" text-anchor="end">200</text>
+        <text x="895" y="190.8" fill="#C5C8C6" text-anchor="end">2.69 ms</text>
+        <text x="935" y="190.8" fill="#CC555A">-</text>
+        <text x="20" y="215.2" fill="#868887">Update resource</text>
+        <text x="463.6" y="215.2" fill="#98A84B" font-weight="700" text-anchor="middle">PASS</text>
+        <text x="699.8" y="215.2" fill="#98A84B" text-anchor="end">200</text>
+        <text x="895" y="215.2" fill="#C5C8C6" text-anchor="end">4.85 ms</text>
+        <text x="935" y="215.2" fill="#CC555A">-</text>
+      </g>
+      <rect x="0" y="264" width="540" height="48.8" rx="6" fill="none" stroke="#98A84B" stroke-width="1.6"/>
+      <rect x="240" y="258" width="80" height="12" fill="#292929"/>
+      <text x="280" y="268" fill="#98A84B" font-weight="700" font-size="13" text-anchor="middle">Summary</text>
+      <text x="20" y="294" fill="#C5C8C6" font-weight="700" font-size="19">Status:</text>
+      <text x="108" y="294" fill="#98A84B" font-weight="700" font-size="19">PASSED</text>
+      <text x="205" y="294" fill="#C5C8C6" font-weight="700" font-size="19">Total Latency:</text>
+      <text x="400" y="294" fill="#68A0B3" font-size="19">28.14 ms</text>
+    </g>
+  </g>
+
+  <!-- Failing run label -->
+  <g class="mono">
+    <circle cx="708" cy="472" r="4" fill="#A5323A"/>
+    <text x="722" y="477" font-size="11" font-weight="700" fill="#A5323A" letter-spacing="2.2">FAILING RUN</text>
+    <line x1="860" y1="473" x2="1591" y2="473" stroke="#A5323A" stroke-opacity="0.35"/>
+  </g>
+
+  <!-- Failing CLI panel: stops at the first failed step -->
+  <g transform="translate(700, 494) scale(0.72)" filter="url(#softShadow)">
+    <rect x="1" y="1" width="1236" height="389.6" rx="8" fill="#292929"/>
+    <circle cx="26" cy="22" r="7" fill="#FF5F57"/>
+    <circle cx="48" cy="22" r="7" fill="#FEBC2E"/>
+    <circle cx="70" cy="22" r="7" fill="#28C840"/>
+    <text x="618" y="27" class="sans" font-size="18" font-weight="700" fill="#C5C8C6" text-anchor="middle">proofrun</text>
+    <g transform="translate(9, 41)" class="mono" font-size="20">
+      <text x="0" y="20" fill="#68A0B3" font-weight="700">$</text>
+      <text x="12.2" y="20" fill="#C5C8C6"> proofrun scenarios/crud.yaml</text>
+      <text x="440" y="68.8" fill="#68A0B3" font-weight="700">Scenario:</text>
+      <text x="550" y="68.8" fill="#C5C8C6" font-weight="700">Create and verify resource</text>
+      <g fill="none" stroke="#C5C8C6" stroke-width="1.6">
+        <rect x="0" y="83" width="1207.8" height="156.6"/>
+        <line x1="341.6" y1="83" x2="341.6" y2="239.6"/>
+        <line x1="500.2" y1="83" x2="500.2" y2="239.6"/>
+        <line x1="658.8" y1="83" x2="658.8" y2="239.6"/>
+        <line x1="841.8" y1="83" x2="841.8" y2="239.6"/>
+        <line x1="0" y1="138" x2="1207.8" y2="138"/>
+      </g>
+      <g fill="#98729F" font-weight="700" font-size="19">
+        <text x="20" y="117.6">Step Name</text>
+        <text x="420.9" y="117.6" text-anchor="middle">Status</text>
+        <text x="579.5" y="117.6" text-anchor="middle">HTTP Code</text>
+        <text x="750.3" y="117.6" text-anchor="middle">Latency</text>
+        <text x="861.8" y="117.6">Error Details</text>
+      </g>
+      <g font-size="19">
+        <text x="20" y="166.4" fill="#868887">Create resource</text>
+        <text x="420.9" y="166.4" fill="#98A84B" font-weight="700" text-anchor="middle">PASS</text>
+        <text x="638.8" y="166.4" fill="#98A84B" text-anchor="end">201</text>
+        <text x="821.8" y="166.4" fill="#C5C8C6" text-anchor="end">18.31 ms</text>
+        <text x="861.8" y="166.4" fill="#CC555A">-</text>
+        <text x="20" y="190.8" fill="#868887">Fetch resource</text>
+        <text x="420.9" y="190.8" fill="#CC555A" font-weight="700" text-anchor="middle">FAIL</text>
+        <text x="638.8" y="190.8" fill="#CC555A" text-anchor="end">200</text>
+        <text x="821.8" y="190.8" fill="#C5C8C6" text-anchor="end">53.52 ms</text>
+        <text x="861.8" y="190.8" fill="#CC555A">JSON Schema mismatch:</text>
+        <text x="861.8" y="215.2" fill="#CC555A">required field is missing</text>
+      </g>
+      <rect x="0" y="264" width="540" height="48.8" rx="6" fill="none" stroke="#CC555A" stroke-width="1.6"/>
+      <rect x="240" y="258" width="80" height="12" fill="#292929"/>
+      <text x="280" y="268" fill="#CC555A" font-weight="700" font-size="13" text-anchor="middle">Summary</text>
+      <text x="20" y="294" fill="#C5C8C6" font-weight="700" font-size="19">Status:</text>
+      <text x="108" y="294" fill="#CC555A" font-weight="700" font-size="19">FAILED</text>
+      <text x="200" y="294" fill="#C5C8C6" font-weight="700" font-size="19">Total Latency:</text>
+      <text x="400" y="294" fill="#68A0B3" font-size="19">73.09 ms</text>
+    </g>
+  </g>
+
+  <!-- Footer -->
+  <line x1="100" y1="844" x2="1591" y2="844" stroke="#1A222C" stroke-opacity="0.12"/>
+  <text x="845" y="873" class="mono" font-size="11" fill="#7A8494" text-anchor="middle" letter-spacing="1.1">ILLUSTRATIVE CLI OUTPUT · YAML API checks</text>
+</svg>
