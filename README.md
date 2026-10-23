@@ -17,7 +17,7 @@
 An endpoint can return `200 OK` while its response is missing a field your application needs. And even when individual endpoints behave as expected, a workflow can fail when one request depends on data returned by another.
 
 <div align="center">
-  <img src="./docs/proofrun-thumbnail.svg" alt="Proofrun reporting a passing scenario" width="860">
+  <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/assets/proofrun-thumbnail.svg" alt="Proofrun reporting a passing scenario" width="860">
 </div>
 
 **Proofrun lets you test both individual API responses and complete multi-step workflows** using readable YAML scenarios.
@@ -28,13 +28,21 @@ An endpoint can return `200 OK` while its response is missing a field your appli
 - Reuse the same scenario locally, in CI, or continuously in daemon mode.
 
 <div align="center">
-  <img src="./docs/demo-fail.svg" alt="Proofrun reporting a failed step in a multi-step scenario" width="860">
+  <img
+    src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/assets/demo-fail.svg"
+    alt="Proofrun reporting a failed step in a multi-step scenario"
+    width="860"
+  >
 </div>
 
 A passing run looks like this:
 
 <div align="center">
-  <img src="./docs/demo-pass.svg" alt="Proofrun reporting a passing scenario" width="860">
+  <img
+    src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/assets/demo-pass.svg"
+    alt="Proofrun reporting a passing scenario"
+    width="860"
+  >
 </div>
 
 **YAML in. API checks out. No database, queue, or external monitoring service required.**
@@ -207,11 +215,10 @@ For a runnable local example, clone the repository and start its demo API:
 git clone https://github.com/Kishan-Thanki/proofrun.git
 cd proofrun
 
-# Terminal 1: start the demo API (standard library only)
+# Terminal 1: start the demo API
 python3 scenarios/server.py
 
-# Terminal 2: run the authentication example from the repository
-export DEMO_PASSWORD=demo-password
+# Terminal 2: run the authentication example
 proofrun scenarios/auth.yaml
 ```
 
@@ -222,7 +229,11 @@ python3 scenarios/server.py --break
 proofrun scenarios/auth.yaml  # expected scenario failure, exit code 1
 ```
 
-The demo API also supports the other scenario files in `scenarios/`: `profile.yaml` (header and schema checks), `chain.yaml` (chained extraction and built-in variables), `crud.yaml` (create/read/update/delete and a negative `404` check), and `resilient.yaml` (environment variables, retries, thresholds, and per-scenario intervals; use `DEMO_PASSWORD=demo-password`).
+The demo API also supports the other scenario files in `scenarios/`: `profile.yaml` (header and schema checks), `chain.yaml` (chained extraction and built-in variables), `crud.yaml` (create/read/update/delete and a negative `404` check), and `resilient.yaml` (environment variables, retries, thresholds, and per-scenario intervals). To run `resilient.yaml` with the demo password, use:
+
+```bash
+DEMO_PASSWORD=demo-password proofrun scenarios/resilient.yaml
+```
 
 ## Config reference
 
@@ -494,10 +505,10 @@ on:
 
 jobs:
   proofrun:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - run: pip install proofrun
