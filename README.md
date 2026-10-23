@@ -28,13 +28,13 @@ An endpoint can return `200 OK` while its response is missing a field your appli
 - Reuse the same scenario locally, in CI, or continuously in daemon mode.
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/demo-fail.svg" alt="Proofrun reporting a failed step in a multi-step scenario" width="860">
+  <img src="./docs/demo-fail.svg" alt="Proofrun reporting a failed step in a multi-step scenario" width="860">
 </div>
 
 A passing run looks like this:
 
 <div align="center">
-  <img src="https://raw.githubusercontent.com/Kishan-Thanki/proofrun/main/docs/demo-pass.svg" alt="Proofrun reporting a passing scenario" width="860">
+  <img src="./docs/demo-pass.svg" alt="Proofrun reporting a passing scenario" width="860">
 </div>
 
 **YAML in. API checks out. No database, queue, or external monitoring service required.**
