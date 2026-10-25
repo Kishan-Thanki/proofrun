@@ -53,6 +53,7 @@ dev = [
     "pyright>=1.1.390",
     "pre-commit>=4.0.0",
     "pytest-cov>=7.1.0",
+    "pip-audit>=2.10.1",
 ]
 
 [tool.ruff]

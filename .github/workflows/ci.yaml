@@ -43,6 +43,9 @@ jobs:
       - name: Install dependencies
         run: make install
 
+      - name: Audit dependencies for vulnerabilities
+        run: make audit
+
       - name: Run code quality & coverage checks
         run: make check
 

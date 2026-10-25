@@ -814,3 +814,58 @@ scenarios:
     assert not result.passed
     assert result.step_results[1].error == "HTTP request failed (ConnectError)"
     assert access_token not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_extracted_runtime_variable_is_redacted_from_step_diagnostics(
+    tmp_path,
+) -> None:
+    """An extracted variable must be redacted if it appears in assertion diagnostics."""
+    runtime_secret = "SESSION-TOKEN-XYZ-SECRET-9988"
+    config_path = tmp_path / "scenario.yaml"
+    config_path.write_text(
+        """version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Runtime variable assertion redaction"
+    steps:
+      - name: "Get secret"
+        request:
+          method: GET
+          path: "/auth"
+        expect:
+          status: 200
+        extract:
+          auth_token: "$.token"
+      - name: "Validate response"
+        request:
+          method: GET
+          path: "/check/${auth_token}"
+        expect:
+          status: 200
+          headers:
+            X-Custom-Echo: "mismatch"
+""",
+        encoding="utf-8",
+    )
+    scenario = load_and_compile_config(config_path).scenarios[0]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth":
+            return httpx.Response(200, json={"token": runtime_secret})
+        return httpx.Response(
+            200,
+            headers={"X-Custom-Echo": f"Received {runtime_secret}"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await ScenarioRunner(scenario).run(client)
+
+    assert not result.passed
+    step2_error = result.step_results[1].error
+    assert step2_error is not None
+    assert runtime_secret not in step2_error
+    assert "[REDACTED]" in step2_error

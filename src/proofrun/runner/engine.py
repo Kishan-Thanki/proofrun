@@ -262,15 +262,20 @@ class ScenarioRunner:
             else:
                 error_message = str(err)
 
+            all_secrets = set(self.scenario._secret_values)
+            all_secrets.update(
+                str(v) for v in self.context.variables.values() if str(v)
+            )
+
             error_message = redact_secrets(
                 error_message,
-                self.scenario._secret_values,
+                all_secrets,
             )
 
             return StepResult(
                 step_name=redact_secrets(
                     step.name,
-                    self.scenario._secret_values,
+                    all_secrets,
                 ),
                 passed=False,
                 status_code=status_code,
