@@ -14,7 +14,7 @@ import fastjsonschema
 import httpx
 
 from proofrun.config.models import ScenarioConfig, StepConfig
-from proofrun.redaction import redact_secrets
+from proofrun.redaction import collect_scalar_strings, redact_secrets
 from proofrun.runner.context import ContextError, ExecutionContext
 
 _MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
@@ -263,9 +263,8 @@ class ScenarioRunner:
                 error_message = str(err)
 
             all_secrets = set(self.scenario._secret_values)
-            all_secrets.update(
-                str(v) for v in self.context.variables.values() if str(v)
-            )
+            for var_val in self.context.variables.values():
+                all_secrets.update(collect_scalar_strings(var_val))
 
             error_message = redact_secrets(
                 error_message,

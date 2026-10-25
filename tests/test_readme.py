@@ -32,7 +32,12 @@ def test_readme_has_complete_config_examples() -> None:
 
 
 @pytest.mark.parametrize("index", range(len(EXAMPLES)))
-def test_readme_config_examples_are_valid(index: int, tmp_path: Path) -> None:
+def test_readme_config_examples_are_valid(
+    index: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("API_TOKEN", "test-token-123")
     config_file = tmp_path / "example.yaml"
     config_file.write_text(EXAMPLES[index], encoding="utf-8")
 

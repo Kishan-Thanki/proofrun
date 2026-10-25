@@ -14,7 +14,7 @@ from proofrun.config.compiler import (
     load_and_compile_config,
 )
 from proofrun.metrics.registry import MetricsRegistry
-from proofrun.redaction import redact_secrets
+from proofrun.redaction import collect_scalar_strings, redact_secrets
 from proofrun.runner.engine import InternalExecutionError, ScenarioRunner
 
 
@@ -186,11 +186,25 @@ def test_redact_secrets_with_no_values_preserves_message() -> None:
     )
 
 
+def test_collect_scalar_strings_extracts_nested_values() -> None:
+    data = {
+        "str_key": "val1",
+        42: [True, b"ignored", None, {"sub": "val2", "num": 100}],
+        "tuple": ("val3",),
+    }
+    extracted = collect_scalar_strings(data)
+    assert extracted == {
+        "val1",
+        "val2",
+        "val3",
+    }
+
+
 def test_environment_secret_in_scenario_name_is_not_exported_as_metric_label(
     tmp_path,
     monkeypatch,
 ) -> None:
-    """Environment secrets must not appear in Prometheus scenario labels."""
+    """Environment secrets must not appear in observability scenario labels."""
     secret = "PROOFRUN-TEST-SECRET-CANARY-METRICS-72bd"
     monkeypatch.setenv("PROOFRUN_TEST_SECRET", secret)
 
@@ -868,4 +882,66 @@ scenarios:
     step2_error = result.step_results[1].error
     assert step2_error is not None
     assert runtime_secret not in step2_error
+    assert "[REDACTED]" in step2_error
+
+
+@pytest.mark.asyncio
+async def test_nested_extracted_runtime_variable_is_redacted_from_step_diagnostics(
+    tmp_path,
+) -> None:
+    """Nested values in extracted dictionary/list objects must be redacted."""
+    nested_token = "NESTED-DEEP-TOKEN-SECRET-4411"
+    config_path = tmp_path / "scenario.yaml"
+    config_path.write_text(
+        """version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Nested runtime variable redaction"
+    steps:
+      - name: "Get nested object"
+        request:
+          method: GET
+          path: "/auth/session"
+        expect:
+          status: 200
+        extract:
+          session_payload: "$.session"
+      - name: "Check failure diagnostic"
+        request:
+          method: GET
+          path: "/resource"
+        expect:
+          status: 200
+          headers:
+            X-Echo: "mismatch"
+""",
+        encoding="utf-8",
+    )
+    scenario = load_and_compile_config(config_path).scenarios[0]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/auth/session":
+            return httpx.Response(
+                200,
+                json={
+                    "session": {
+                        "user": {"id": 101, "keys": ["k1", nested_token]},
+                    }
+                },
+            )
+        return httpx.Response(
+            200,
+            headers={"X-Echo": f"Received token {nested_token}"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await ScenarioRunner(scenario).run(client)
+
+    assert not result.passed
+    step2_error = result.step_results[1].error
+    assert step2_error is not None
+    assert nested_token not in step2_error
     assert "[REDACTED]" in step2_error
