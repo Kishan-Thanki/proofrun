@@ -11,7 +11,7 @@ import time
 import uuid
 from typing import Any
 
-from jsonpath_ng import parse
+from jsonpath_ng.parser import parse
 
 
 class ContextError(Exception):
