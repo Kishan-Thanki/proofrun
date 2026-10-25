@@ -31,6 +31,7 @@ from proofrun.metrics.server import MetricsServer
 from proofrun.monitor.daemon import Daemon
 from proofrun.notify.base import Notifier
 from proofrun.notify.webhook import WebhookNotifier
+from proofrun.redaction import redact_secrets
 from proofrun.runner.execution import ClientFactory, run_scenario
 
 T = TypeVar("T")
@@ -102,13 +103,35 @@ async def run_once(
         *(
             run_scenario(scenario, client_factory)
             for scenario in proofrun_config.scenarios
-        )
+        ),
+        return_exceptions=True,
     )
 
-    for result in results:
-        render_scenario_result(result)
+    all_passed = True
 
-    return all(result.passed for result in results)
+    for scenario, result in zip(
+        proofrun_config.scenarios,
+        results,
+        strict=True,
+    ):
+        if isinstance(result, asyncio.CancelledError):
+            raise result
+
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result
+            print_internal_error(
+                redact_secrets(scenario.name, scenario._secret_values),
+                result,
+            )
+            all_passed = False
+            continue
+
+        render_scenario_result(result)
+        if not result.passed:
+            all_passed = False
+
+    return all_passed
 
 
 async def run_daemon_mode(

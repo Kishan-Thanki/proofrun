@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import fastjsonschema
 import httpx
 import pytest
 from pydantic import HttpUrl
@@ -20,6 +21,7 @@ from proofrun.config.models import (
 from proofrun.runner.context import ExecutionContext
 from proofrun.runner.engine import (
     _MAX_RESPONSE_BODY_BYTES,
+    InternalExecutionError,
     ScenarioRunner,
     describe_header_mismatch,
     is_sensitive_header,
@@ -273,7 +275,7 @@ async def test_compiled_json_schema_validation() -> None:
 
     def mock_compiled_schema(data: Any) -> None:
         if not isinstance(data.get("id"), int):
-            raise ValueError("Field 'id' must be an integer")
+            raise fastjsonschema.JsonSchemaException("Field 'id' must be an integer")
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": "not-an-int"})
@@ -307,7 +309,7 @@ async def test_compiled_json_schema_validation_succeeds() -> None:
 
     def mock_compiled_schema(data: Any) -> None:
         if not isinstance(data.get("id"), int):
-            raise ValueError("Field 'id' must be an integer")
+            raise fastjsonschema.JsonSchemaException("Field 'id' must be an integer")
 
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"id": 123})
@@ -547,6 +549,37 @@ async def test_missing_timeout_fails_step() -> None:
     assert result.passed is False
     assert result.error is not None
     assert "missing a resolved request timeout" in result.error
+
+
+@pytest.mark.asyncio
+async def test_unexpected_internal_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected programming errors must not become ordinary step failures."""
+    step = StepConfig(
+        name="Internal Error",
+        request=RequestConfig(method="GET", path="/health", timeout=5.0),
+        expect=ExpectConfig(status=200),
+    )
+    runner = build_runner([step])
+
+    def fail_interpolation(_: str) -> Any:
+        raise RuntimeError("internal bug")
+
+    monkeypatch.setattr(
+        runner.context,
+        "interpolate_string",
+        fail_interpolation,
+    )
+
+    async with httpx.AsyncClient(
+        transport=make_transport(
+            lambda request: httpx.Response(200),
+        ),
+    ) as client:
+        with pytest.raises(InternalExecutionError) as exc_info:
+            await runner.execute_step(step, client)
+    assert "internal bug" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio

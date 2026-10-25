@@ -10,11 +10,12 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
 
+import fastjsonschema
 import httpx
 
 from proofrun.config.models import ScenarioConfig, StepConfig
 from proofrun.redaction import redact_secrets
-from proofrun.runner.context import ExecutionContext
+from proofrun.runner.context import ContextError, ExecutionContext
 
 _MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
 _RESPONSE_CHUNK_BYTES = 64 * 1024
@@ -62,6 +63,10 @@ def describe_header_mismatch(
 
 class EngineError(Exception):
     """Raised when HTTP step execution or assertion evaluation fails."""
+
+
+class InternalExecutionError(Exception):
+    """Unexpected execution failure with sensitive details suppressed."""
 
 
 @dataclass
@@ -215,7 +220,7 @@ class ScenarioRunner:
 
                 try:
                     response_data = json.loads(response_body)
-                except Exception:
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     json_error = "Response body is not valid JSON."
 
                 if json_error is not None:
@@ -226,7 +231,7 @@ class ScenarioRunner:
 
                 try:
                     step.expect._compiled_schema(response_data)
-                except Exception:
+                except fastjsonschema.JsonSchemaException:
                     schema_error = "Schema assertion failed."
 
                 if schema_error is not None:
@@ -248,19 +253,14 @@ class ScenarioRunner:
                 latency_ms=round(latency_ms, 2),
             )
 
-        except Exception as err:  # noqa: BLE001
+        except (httpx.RequestError, EngineError, ContextError) as err:
             latency_ms = (perf_counter() - start_time) * 1000
-
             status_code = response.status_code if response is not None else 0
 
             if isinstance(err, httpx.RequestError):
                 error_message = f"HTTP request failed ({type(err).__name__})"
-            elif isinstance(err, EngineError):
-                error_message = str(err)
             else:
-                error_message = (
-                    f"Unexpected error during step execution ({type(err).__name__})"
-                )
+                error_message = str(err)
 
             error_message = redact_secrets(
                 error_message,
@@ -277,6 +277,12 @@ class ScenarioRunner:
                 latency_ms=round(latency_ms, 2),
                 error=error_message,
             )
+
+        except Exception as err:
+            raise InternalExecutionError(
+                f"Unexpected error during step execution "
+                f"({type(err).__name__}); details suppressed"
+            ) from None
 
     async def run(self, client: httpx.AsyncClient) -> ScenarioResult:
         """Execute all scenario steps sequentially.

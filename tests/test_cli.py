@@ -32,7 +32,9 @@ from proofrun.cli.runtime import (
     new_client,
     run_daemon_mode,
     run_event_loop,
+    run_once,
 )
+from proofrun.config.provider import ConfigProvider
 from proofrun.metrics.registry import MetricsRegistry
 from proofrun.monitor.daemon import Daemon
 from proofrun.notify.webhook import WebhookNotifier
@@ -552,6 +554,74 @@ def test_run_event_loop_uses_uvloop_when_available() -> None:
         assert run_event_loop(main()) == 9
 
     assert calls == ["uvloop.run"]
+
+
+@pytest.mark.asyncio
+async def test_run_once_reports_internal_errors_safely(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected errors fail the run without exposing exception details."""
+    config_path = write_config(tmp_path, "https://example.com")
+    output: list[str] = []
+
+    monkeypatch.setattr(
+        "proofrun.cli.render.console.print",
+        lambda *args, **kwargs: output.append(str(args[0])),
+    )
+
+    async def fail_with_bug(scenario: Any, *_: Any) -> Any:
+        raise RuntimeError("internal secret detail")
+
+    monkeypatch.setattr("proofrun.cli.runtime.run_scenario", fail_with_bug)
+
+    passed = await run_once(ConfigProvider(config_path), new_client)
+    displayed = " ".join(output)
+
+    assert passed is False
+    assert "RuntimeError" in displayed
+    assert "internal secret detail" not in displayed
+
+
+@pytest.mark.asyncio
+async def test_run_once_propagates_cancellation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancellation must propagate instead of becoming a normal failure."""
+    config_path = write_config(tmp_path, "https://example.com")
+
+    async def cancel_run(scenario: Any, *_: Any) -> Any:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("proofrun.cli.runtime.run_scenario", cancel_run)
+
+    with pytest.raises(asyncio.CancelledError):
+        await run_once(ConfigProvider(config_path), new_client)
+
+
+@pytest.mark.asyncio
+async def test_run_once_propagates_non_exception_base_exception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BaseException signals must propagate instead of being swallowed."""
+
+    class FatalSignal(BaseException):
+        pass
+
+    config_path = write_config(tmp_path, "https://example.com")
+
+    async def fail_with_fatal_signal(scenario: Any, *_: Any) -> Any:
+        raise FatalSignal()
+
+    monkeypatch.setattr(
+        "proofrun.cli.runtime.run_scenario",
+        fail_with_fatal_signal,
+    )
+
+    with pytest.raises(FatalSignal):
+        await run_once(ConfigProvider(config_path), new_client)
 
 
 def test_cli_once_mode_without_daemon_options_prints_no_warning(

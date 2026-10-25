@@ -15,7 +15,7 @@ from proofrun.config.compiler import (
 )
 from proofrun.metrics.registry import MetricsRegistry
 from proofrun.redaction import redact_secrets
-from proofrun.runner.engine import ScenarioRunner
+from proofrun.runner.engine import InternalExecutionError, ScenarioRunner
 
 
 @pytest.mark.asyncio
@@ -102,17 +102,19 @@ scenarios:
     async def handler(request: httpx.Request) -> httpx.Response:
         raise RuntimeError(f"Unexpected failure for {request.url}")
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler),
-    ) as client:
-        result = await ScenarioRunner(scenario).execute_step(
-            scenario.steps[0],
-            client,
-        )
+    with pytest.raises(InternalExecutionError) as exc_info:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            await ScenarioRunner(scenario).execute_step(
+                scenario.steps[0],
+                client,
+            )
 
-    assert not result.passed
-    assert result.error is not None
-    assert secret not in result.error
+    assert "RuntimeError" in str(exc_info.value)
+    assert secret not in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+    assert exc_info.value.__suppress_context__
 
 
 @pytest.mark.asyncio
