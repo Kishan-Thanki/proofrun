@@ -99,6 +99,21 @@ def test_sync_drops_removed_scenarios() -> None:
     assert 'scenario="gone"' not in output
 
 
+def test_sync_drops_secret_metadata_for_removed_scenarios() -> None:
+    registry = MetricsRegistry()
+    registry.record_run(
+        "temporary",
+        True,
+        0.1,
+        1.0,
+        secret_values={"test-secret-value"},
+    )
+
+    registry.sync(set())
+
+    assert "temporary" not in registry._secret_values
+
+
 def test_label_values_are_escaped() -> None:
     registry = MetricsRegistry()
 

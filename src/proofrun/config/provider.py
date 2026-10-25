@@ -43,7 +43,7 @@ class ConfigProvider:
             modified_ns = self.config_path.stat().st_mtime_ns
         except OSError as err:
             error = ConfigCompilerError(
-                f"Unable to access configuration file '{self.config_path}': {err}"
+                f"Unable to access configuration file ({type(err).__name__})."
             )
             return self._config, error
 

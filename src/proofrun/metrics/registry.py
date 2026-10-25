@@ -7,10 +7,11 @@ Series of scenarios that are removed from the configuration are dropped.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 from proofrun.health import Status
+from proofrun.redaction import redact_secrets
 
 
 @dataclass
@@ -83,6 +84,7 @@ class MetricsRegistry:
 
     def __init__(self) -> None:
         self._series: dict[str, _Series] = {}
+        self._secret_values: dict[str, frozenset[str]] = {}
 
     def _get(self, scenario_name: str) -> _Series:
         return self._series.setdefault(scenario_name, _Series())
@@ -93,8 +95,13 @@ class MetricsRegistry:
         passed: bool,
         duration_seconds: float,
         timestamp: float,
+        *,
+        secret_values: Iterable[str] | None = None,
     ) -> None:
         """Record the outcome of one finished scenario run."""
+        if secret_values is not None:
+            self._secret_values[scenario_name] = frozenset(secret_values)
+
         series = self._get(scenario_name)
         series.runs += 1
         series.duration_seconds = duration_seconds
@@ -113,13 +120,54 @@ class MetricsRegistry:
         }.get(status)
 
     def sync(self, active_scenario_names: set[str]) -> None:
-        """Drop the series of scenarios that no longer exist."""
+        """Drop removed scenarios and their secret metadata."""
         for name in set(self._series) - active_scenario_names:
             del self._series[name]
+
+        for name in set(self._secret_values) - active_scenario_names:
+            del self._secret_values[name]
+
+    def _scenario_labels(self) -> dict[str, str]:
+        """Return redacted, unique labels for all active metric series."""
+        labels = {
+            name: redact_secrets(
+                name,
+                self._secret_values.get(name, frozenset()),
+            )
+            for name in self._series
+        }
+
+        groups: dict[str, list[str]] = {}
+        for name, label in labels.items():
+            groups.setdefault(label, []).append(name)
+
+        reserved_labels = set(labels.values())
+        generated_labels: set[str] = set()
+
+        for label in sorted(groups):
+            names = groups[label]
+
+            if len(names) < 2:
+                continue
+
+            suffix = 1
+            for name in sorted(names):
+                candidate = f"{label} [series {suffix}]"
+
+                while candidate in reserved_labels or candidate in generated_labels:
+                    suffix += 1
+                    candidate = f"{label} [series {suffix}]"
+
+                labels[name] = candidate
+                generated_labels.add(candidate)
+                suffix += 1
+
+        return labels
 
     def render(self) -> str:
         """Render all metrics in the text exposition format."""
         lines: list[str] = []
+        scenario_labels = self._scenario_labels()
 
         for metric, kind, help_text, getter in _DEFINITIONS:
             lines.append(f"# HELP {metric} {help_text}")
@@ -129,8 +177,10 @@ class MetricsRegistry:
                 value = getter(self._series[name])
 
                 if value is not None:
+                    label_value = scenario_labels[name]
                     lines.append(
-                        f'{metric}{{scenario="{_escape(name)}"}} {_number(value)}'
+                        f'{metric}{{scenario="{_escape(label_value)}"}} '
+                        f"{_number(value)}"
                     )
 
         return "\n".join(lines) + "\n"

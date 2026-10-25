@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
+from proofrun.cli.render import print_internal_error
 from proofrun.config.models import ScenarioConfig
 from proofrun.config.provider import ConfigProvider
 from proofrun.health import StateManager, Status
@@ -348,6 +349,36 @@ async def test_metrics_are_recorded(
     )
 
 
+async def test_environment_secret_in_scenario_name_is_redacted_from_daemon_metrics(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Daemon metrics must not export environment secrets in scenario labels."""
+    secret = "PROOFRUN-TEST-SECRET-CANARY-DAEMON-METRICS-81cf"
+    monkeypatch.setenv("PROOFRUN_TEST_SECRET", secret)
+
+    config = tmp_path / "c.yaml"
+    write_config(config, scenario_dict("${env.PROOFRUN_TEST_SECRET}"))
+
+    results: list[ScenarioResult] = []
+    registry = MetricsRegistry()
+    monkeypatch.setattr("proofrun.monitor.daemon.run_scenario", scripted([True]))
+
+    await run_until(
+        make_daemon(
+            config,
+            metrics=registry,
+            on_result=results.append,
+        ),
+        lambda: len(results) >= 1,
+    )
+
+    output = registry.render()
+
+    assert secret not in output
+    assert 'scenario="[REDACTED]"' in output
+
+
 async def test_works_without_optional_collaborators(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -485,7 +516,8 @@ async def test_unexpected_scenario_errors_are_reported_and_survived(
     )
 
     assert internal[0][0] == "A"
-    assert str(internal[0][1]) == "bug"
+    assert "RuntimeError" in str(internal[0][1])
+    assert "details suppressed" in str(internal[0][1])
 
 
 async def test_unexpected_errors_without_a_handler_are_ignored(
@@ -572,3 +604,77 @@ async def test_configuration_errors_without_a_handler_are_ignored(
     daemon = make_daemon(config)
 
     await run_until(daemon, lambda: daemon.clock() > 5)
+
+
+async def test_environment_secret_in_scenario_name_is_redacted_from_notification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Environment secrets must not leak through notification events."""
+    secret = "PROOFRUN-TEST-SECRET-CANARY-WEBHOOK-63af"
+    monkeypatch.setenv("PROOFRUN_TEST_SECRET", secret)
+
+    config = tmp_path / "c.yaml"
+    write_config(config, scenario_dict("${env.PROOFRUN_TEST_SECRET}"))
+
+    notifier = RecordingNotifier()
+    monkeypatch.setattr(
+        "proofrun.monitor.daemon.run_scenario",
+        scripted([False]),
+    )
+
+    await run_until(
+        make_daemon(config, notifier=notifier),
+        lambda: len(notifier.events) >= 1,
+    )
+
+    event = notifier.events[0]
+
+    assert secret not in event.scenario_name
+    assert secret not in event.details
+
+
+async def test_environment_secret_is_redacted_from_internal_error_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected daemon errors must not expose environment secrets."""
+    secret = "PROOFRUN-TEST-SECRET-CANARY-INTERNAL-4b91"
+    monkeypatch.setenv("PROOFRUN_TEST_SECRET", secret)
+
+    config = tmp_path / "c.yaml"
+    write_config(config, scenario_dict("${env.PROOFRUN_TEST_SECRET}"))
+
+    output: list[str] = []
+    internal_errors: list[tuple[str, BaseException]] = []
+
+    monkeypatch.setattr(
+        "proofrun.cli.render.console.print",
+        lambda *args, **kwargs: output.append(str(args[0])),
+    )
+
+    async def fail_with_secret(
+        scenario: ScenarioConfig,
+        *_: Any,
+    ) -> ScenarioResult:
+        raise RuntimeError(f"Unexpected internal failure: {secret}")
+
+    def capture_internal_error(name: str, error: BaseException) -> None:
+        internal_errors.append((name, error))
+        print_internal_error(name, error)
+
+    monkeypatch.setattr(
+        "proofrun.monitor.daemon.run_scenario",
+        fail_with_secret,
+    )
+
+    await run_until(
+        make_daemon(config, on_internal_error=capture_internal_error),
+        lambda: bool(output),
+    )
+
+    assert secret not in "\n".join(output)
+    assert internal_errors
+    assert secret not in str(internal_errors[0][1])
+    assert internal_errors[0][1].__cause__ is None
+    assert internal_errors[0][1].__context__ is None

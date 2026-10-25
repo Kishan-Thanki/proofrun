@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from proofrun.config.models import ScenarioConfig, StepConfig
+from proofrun.redaction import redact_secrets
 from proofrun.runner.context import ExecutionContext
 
 _SENSITIVE_HEADER_PARTS = (
@@ -196,18 +197,26 @@ class ScenarioRunner:
             response_data: Any = None
 
             if step.expect._compiled_schema is not None or step.extract:
+                json_error: str | None = None
+
                 try:
                     response_data = response.json()
-                except Exception as err:
-                    raise EngineError(
-                        f"Response body is not valid JSON: {err}"
-                    ) from err
+                except Exception:
+                    json_error = "Response body is not valid JSON."
+
+                if json_error is not None:
+                    raise EngineError(json_error)
 
             if step.expect._compiled_schema is not None:
+                schema_error: str | None = None
+
                 try:
                     step.expect._compiled_schema(response_data)
-                except Exception as err:
-                    raise EngineError(f"Schema assertion failed: {err}") from err
+                except Exception:
+                    schema_error = "Schema assertion failed."
+
+                if schema_error is not None:
+                    raise EngineError(schema_error)
 
             if step.extract:
                 self.context.extract_variables(
@@ -216,7 +225,10 @@ class ScenarioRunner:
                 )
 
             return StepResult(
-                step_name=step.name,
+                step_name=redact_secrets(
+                    step.name,
+                    self.scenario._secret_values,
+                ),
                 passed=True,
                 status_code=response.status_code,
                 latency_ms=round(latency_ms, 2),
@@ -227,12 +239,29 @@ class ScenarioRunner:
 
             status_code = response.status_code if response is not None else 0
 
+            if isinstance(err, httpx.RequestError):
+                error_message = f"HTTP request failed ({type(err).__name__})"
+            elif isinstance(err, EngineError):
+                error_message = str(err)
+            else:
+                error_message = (
+                    f"Unexpected error during step execution ({type(err).__name__})"
+                )
+
+            error_message = redact_secrets(
+                error_message,
+                self.scenario._secret_values,
+            )
+
             return StepResult(
-                step_name=step.name,
+                step_name=redact_secrets(
+                    step.name,
+                    self.scenario._secret_values,
+                ),
                 passed=False,
                 status_code=status_code,
                 latency_ms=round(latency_ms, 2),
-                error=str(err),
+                error=error_message,
             )
 
     async def run(self, client: httpx.AsyncClient) -> ScenarioResult:
@@ -268,7 +297,10 @@ class ScenarioRunner:
         total_latency_ms = (perf_counter() - total_start) * 1000
 
         return ScenarioResult(
-            scenario_name=self.scenario.name,
+            scenario_name=redact_secrets(
+                self.scenario.name,
+                self.scenario._secret_values,
+            ),
             passed=scenario_passed,
             total_latency_ms=round(total_latency_ms, 2),
             step_results=step_results,

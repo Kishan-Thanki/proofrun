@@ -74,6 +74,7 @@ def test_load_and_compile_file_not_found() -> None:
         load_and_compile_config(missing_path)
 
     assert "Configuration file not found" in str(exc_info.value)
+    assert str(missing_path.resolve()) not in str(exc_info.value)
 
 
 def test_load_and_compile_invalid_yaml(tmp_path: Path) -> None:
@@ -94,6 +95,7 @@ global:
         load_and_compile_config(config_path)
 
     assert "Invalid YAML syntax" in str(exc_info.value)
+    assert str(config_path) not in str(exc_info.value)
 
 
 def test_load_and_compile_os_error_reading_file(tmp_path: Path) -> None:
@@ -105,6 +107,7 @@ def test_load_and_compile_os_error_reading_file(tmp_path: Path) -> None:
         load_and_compile_config(dir_path)
 
     assert "Failed to read configuration file" in str(exc_info.value)
+    assert str(dir_path) not in str(exc_info.value)
 
 
 def test_load_and_compile_non_mapping_yaml(tmp_path: Path) -> None:
@@ -709,6 +712,7 @@ scenarios:
 
     assert "'DEFINITELY_NOT_SET' is not set" in message
     assert "global.headers.X-Key" in message
+    assert str(tmp_path.resolve()) not in message
 
 
 def test_validation_errors_do_not_echo_resolved_secrets(

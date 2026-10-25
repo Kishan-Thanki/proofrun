@@ -175,6 +175,8 @@ class StepConfig(StrictModel):
 class ScenarioConfig(StrictModel):
     """Defines a sequence of dependent execution steps against a target host."""
 
+    _secret_values: frozenset[str] = PrivateAttr(default_factory=frozenset)
+
     name: str = Field(
         ...,
         description="Human-readable scenario suite name.",

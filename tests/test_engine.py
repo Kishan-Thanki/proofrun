@@ -143,7 +143,8 @@ async def test_network_failure_reports_status_zero() -> None:
     assert result.passed is False
     assert result.status_code == 0
     assert result.error is not None
-    assert "Connection failed" in result.error
+    assert "HTTP request failed (ConnectError)" in result.error
+    assert "Connection failed" not in result.error
 
 
 @pytest.mark.asyncio
@@ -249,6 +250,38 @@ async def test_compiled_json_schema_validation() -> None:
     assert result.status_code == 200
     assert result.error is not None
     assert "Schema assertion failed" in result.error
+    assert "Field 'id' must be an integer" not in result.error
+
+
+@pytest.mark.asyncio
+async def test_compiled_json_schema_validation_succeeds() -> None:
+    """Verifies a valid response passes compiled schema validation."""
+
+    def mock_compiled_schema(data: Any) -> None:
+        if not isinstance(data.get("id"), int):
+            raise ValueError("Field 'id' must be an integer")
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": 123})
+
+    expect_cfg = ExpectConfig(status=200)
+    expect_cfg._compiled_schema = mock_compiled_schema
+
+    step = StepConfig(
+        name="Schema Check",
+        request=RequestConfig(method="GET", path="/user", timeout=5.0),
+        expect=expect_cfg,
+    )
+
+    runner = build_runner([step])
+
+    async with httpx.AsyncClient(
+        transport=make_transport(handler),
+    ) as client:
+        result = await runner.execute_step(step, client)
+
+    assert result.passed is True
+    assert result.error is None
 
 
 @pytest.mark.asyncio
@@ -284,6 +317,7 @@ async def test_invalid_json_fails_when_extraction_is_required() -> None:
     assert result.status_code == 200
     assert result.error is not None
     assert "JSON" in result.error
+    assert "Expecting value" not in result.error
 
 
 @pytest.mark.asyncio
