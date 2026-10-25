@@ -583,13 +583,26 @@ docker run -d --name proofrun --restart unless-stopped \
   -e PROOFRUN_METRICS_PORT=9464 \
   -e PROOFRUN_METRICS_HOST=0.0.0.0 \
   -p 127.0.0.1:9464:9464 \
-  ghcr.io/kishan-thanki/proofrun /monitors/api.yaml --daemon
+  ghcr.io/kishan-thanki/proofrun /monitors/api.yaml --daemon --allow-remote-metrics
 ```
 
 - The image runs as an unprivileged user (UID `10001`). Mount config files read-only.
 - Inside a container, the metrics server must listen on `0.0.0.0` to be reachable through a published port. Publishing to `127.0.0.1` on the host limits exposure.
 - Metrics are optional, so the image does not require the metrics endpoint for basic run-once use.
 - See [`deploy/docker-compose.yaml`](https://github.com/Kishan-Thanki/proofrun/blob/main/deploy/docker-compose.yaml) for a Compose example using a read-only filesystem, dropped capabilities, and a health check.
+
+### Verify a published image
+
+Release images are signed by digest using Cosign keyless signing. With Cosign installed, set `RELEASE_TAG` to the exact release tag and `IMAGE_DIGEST` to the registry digest (`sha256:...`):
+
+```bash
+RELEASE_TAG="vX.Y.Z"
+IMAGE_DIGEST="sha256:..."
+cosign verify --certificate-identity "https://github.com/Kishan-Thanki/proofrun/.github/workflows/release.yaml@refs/tags/${RELEASE_TAG}" --certificate-oidc-issuer "https://token.actions.githubusercontent.com" "ghcr.io/kishan-thanki/proofrun@${IMAGE_DIGEST}"
+```
+
+Use the immutable digest for verification rather than a mutable image tag. Replace both placeholders with values from the release.
+
 
 ## systemd
 
@@ -622,6 +635,7 @@ proofrun <config.yaml> --daemon        # run continuously
 proofrun <config.yaml> --daemon -i 30  # override all scenario intervals
 proofrun <config.yaml> --daemon --webhook-url <url>
 proofrun <config.yaml> --daemon --metrics-port 9464
+proofrun <config.yaml> --daemon --metrics-port 9464 --metrics-host 0.0.0.0 --allow-remote-metrics
 proofrun --version                     # or -v
 python -m proofrun <config.yaml>       # equivalent module entry point
 ```
@@ -634,6 +648,7 @@ python -m proofrun <config.yaml>       # equivalent module entry point
 | `--webhook-url` | Daemon-only webhook destination; also configurable with `PROOFRUN_WEBHOOK_URL`. |
 | `--metrics-port` | Daemon-only metrics port (`1`–`65535`); also configurable with `PROOFRUN_METRICS_PORT`. |
 | `--metrics-host` | Daemon-only metrics bind address; defaults to `127.0.0.1`. Also configurable with `PROOFRUN_METRICS_HOST`. |
+| `--allow-remote-metrics` | Daemon-only: explicitly permits unauthenticated metrics on a non-loopback address. |
 | `--version`, `-v` | Print version and exit. |
 | `--install-completion`, `--show-completion` | Install or print shell completion. |
 

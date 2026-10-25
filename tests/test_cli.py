@@ -362,6 +362,19 @@ def test_cli_passes_a_registry_to_the_daemon_when_metrics_are_enabled(
 
 def test_cli_warns_when_metrics_are_exposed(tmp_path: Path) -> None:
     config = write_config(tmp_path, "http://127.0.0.1:9")
+    blocked = runner.invoke(
+        app,
+        [
+            str(config),
+            "--daemon",
+            "--metrics-port",
+            str(free_port()),
+            "--metrics-host",
+            "0.0.0.0",
+        ],
+    )
+    assert blocked.exit_code == 2
+    assert "Non-loopback metrics binding" in blocked.output
 
     with patch("proofrun.cli.runtime.Daemon", FakeDaemon):
         result = runner.invoke(
@@ -373,9 +386,12 @@ def test_cli_warns_when_metrics_are_exposed(tmp_path: Path) -> None:
                 str(free_port()),
                 "--metrics-host",
                 "0.0.0.0",
+                "--allow-remote-metrics",
             ],
         )
 
+    once_result = runner.invoke(app, [str(config), "--allow-remote-metrics"])
+    assert once_result.exit_code == 2
     assert "reachable from the network" in result.stdout
 
 
