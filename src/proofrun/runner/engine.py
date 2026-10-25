@@ -5,6 +5,7 @@ evaluates response assertions, extracts runtime variables into
 ExecutionContext, and records high-resolution latency metrics.
 """
 
+import json
 from dataclasses import dataclass, field
 from time import perf_counter
 from typing import Any
@@ -14,6 +15,9 @@ import httpx
 from proofrun.config.models import ScenarioConfig, StepConfig
 from proofrun.redaction import redact_secrets
 from proofrun.runner.context import ExecutionContext
+
+_MAX_RESPONSE_BODY_BYTES = 10 * 1024 * 1024
+_RESPONSE_CHUNK_BYTES = 64 * 1024
 
 _SENSITIVE_HEADER_PARTS = (
     "auth",
@@ -149,14 +153,24 @@ class ScenarioRunner:
             params = self.context.interpolate_data(step.request.params)
             json_payload = self.context.interpolate_data(step.request.json_payload)
 
-            response = await client.request(
+            async with client.stream(
                 method=step.request.method,
                 url=full_url,
                 headers=headers,
                 params=params,
                 json=json_payload,
                 timeout=step.request.timeout,
-            )
+            ) as streamed_response:
+                response = streamed_response
+                response_body = bytearray()
+
+                async for chunk in streamed_response.aiter_bytes(
+                    chunk_size=_RESPONSE_CHUNK_BYTES,
+                ):
+                    if len(response_body) + len(chunk) > _MAX_RESPONSE_BODY_BYTES:
+                        raise EngineError("Response body exceeds the 10 MiB limit.")
+
+                    response_body.extend(chunk)
 
             latency_ms = (perf_counter() - start_time) * 1000
 
@@ -200,7 +214,7 @@ class ScenarioRunner:
                 json_error: str | None = None
 
                 try:
-                    response_data = response.json()
+                    response_data = json.loads(response_body)
                 except Exception:
                     json_error = "Response body is not valid JSON."
 

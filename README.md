@@ -492,30 +492,62 @@ This loads the file, resolves `${env.NAME}` references, validates the configurat
 
 ## Use it in CI
 
-Proofrun returns `0` when all scenarios pass and `1` when a scenario fails or the configuration cannot be loaded/validated. CLI usage errors return `2`.
+Proofrun returns `0` when all scenarios pass and `1` when a scenario fails or the configuration cannot be loaded or validated. CLI usage errors return `2`.
 
-Example GitHub Actions workflow:
+Treat scenario files as executable configuration: they can make authenticated HTTP requests to configured endpoints. Do not run untrusted scenario changes with privileged credentials.
+
+A safer GitHub Actions pattern is to validate configuration on pull requests without making API requests, then run authenticated checks after changes reach the trusted `main` branch.
 
 ```yaml
 name: API checks
 
 on:
-  workflow_dispatch:
   pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
-  proofrun:
+  validate:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
-      - run: pip install proofrun
-      - run: proofrun monitors/api.yaml --validate
+
+      - run: python -m pip install proofrun
+
+      - name: Validate configuration without sending requests
+        run: proofrun monitors/api.yaml --validate
         env:
-          API_TOKEN: ${{ secrets.API_TOKEN }}
-      - run: proofrun monitors/api.yaml
+          # Placeholder only; never expose real credentials to this job.
+          API_TOKEN: validation-placeholder
+
+  run-api-checks:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: api-checks
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - run: python -m pip install proofrun
+
+      - name: Run API scenarios
+        run: proofrun monitors/api.yaml
         env:
           API_TOKEN: ${{ secrets.API_TOKEN }}
 ```

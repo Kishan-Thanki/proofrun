@@ -19,6 +19,7 @@ from proofrun.config.models import (
 )
 from proofrun.runner.context import ExecutionContext
 from proofrun.runner.engine import (
+    _MAX_RESPONSE_BODY_BYTES,
     ScenarioRunner,
     describe_header_mismatch,
     is_sensitive_header,
@@ -77,6 +78,53 @@ async def test_successful_get_request() -> None:
     assert result.status_code == 200
     assert result.error is None
     assert result.latency_ms >= 0
+
+
+@pytest.mark.asyncio
+async def test_oversized_response_fails_and_closes_stream() -> None:
+    """Reject oversized response bodies and close the HTTP stream."""
+
+    class OversizedStream(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self) -> Any:
+            remaining = _MAX_RESPONSE_BODY_BYTES + 1
+            chunk = b"x" * (64 * 1024)
+
+            while remaining:
+                size = min(remaining, len(chunk))
+                yield chunk[:size]
+                remaining -= size
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    stream = OversizedStream()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=stream)
+
+    step = StepConfig(
+        name="Oversized Response",
+        request=RequestConfig(
+            method="GET",
+            path="/large",
+            timeout=5.0,
+        ),
+        expect=ExpectConfig(status=200),
+    )
+
+    runner = build_runner([step])
+
+    async with httpx.AsyncClient(
+        transport=make_transport(handler),
+    ) as client:
+        result = await runner.execute_step(step, client)
+
+    assert result.passed is False
+    assert result.status_code == 200
+    assert result.error == "Response body exceeds the 10 MiB limit."
+    assert stream.closed is True
 
 
 @pytest.mark.asyncio
