@@ -14,6 +14,7 @@ from rich.table import Table
 from proofrun import __version__
 from proofrun.cli.render import console
 from proofrun.cli.runtime import (
+    _LOOPBACK_HOSTS,
     new_client,
     run_daemon_mode,
     run_event_loop,
@@ -66,6 +67,7 @@ def _check_daemon_options(
         ("webhook_url", "--webhook-url"),
         ("metrics_port", "--metrics-port"),
         ("metrics_host", "--metrics-host"),
+        ("allow_remote_metrics", "--allow-remote-metrics"),
     )
 
     for parameter_name, option_name in daemon_options:
@@ -196,6 +198,13 @@ def run_command(
             ),
         ),
     ] = None,
+    allow_remote_metrics: Annotated[
+        bool,
+        typer.Option(
+            "--allow-remote-metrics",
+            help="Permit unauthenticated metrics to bind to a non-loopback address.",
+        ),
+    ] = False,
     _show_version: Annotated[
         bool | None,
         typer.Option(
@@ -216,6 +225,17 @@ def run_command(
 
         raise typer.Exit(code=validate_config(config_path))
 
+    if (
+        not once
+        and metrics_port is not None
+        and (metrics_host or DEFAULT_METRICS_HOST) not in _LOOPBACK_HOSTS
+        and not allow_remote_metrics
+    ):
+        raise typer.BadParameter(
+            "Non-loopback metrics binding requires --allow-remote-metrics.",
+            ctx=ctx,
+            param_hint="--metrics-host",
+        )
     if not once and metrics_host is not None and metrics_port is None:
         raise typer.BadParameter(
             "--metrics-host requires --metrics-port or PROOFRUN_METRICS_PORT.",

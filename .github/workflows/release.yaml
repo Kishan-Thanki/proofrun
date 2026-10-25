@@ -105,6 +105,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -151,15 +152,29 @@ jobs:
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
 
       - name: Build and push (linux/amd64, linux/arm64)
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true
+          provenance: mode=max
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Sign published image by digest
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+        run: cosign sign --yes ghcr.io/kishan-thanki/proofrun@"${IMAGE_DIGEST}"
+      - name: Verify published image signature
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+          RELEASE_REF: ${{ github.ref }}
+        run: cosign verify --certificate-identity "https://github.com/Kishan-Thanki/proofrun/.github/workflows/release.yaml@${RELEASE_REF}" --certificate-oidc-issuer "https://token.actions.githubusercontent.com" "ghcr.io/kishan-thanki/proofrun@${IMAGE_DIGEST}"
 
   github-release:
     name: Create GitHub Release

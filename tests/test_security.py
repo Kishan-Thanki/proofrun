@@ -688,3 +688,129 @@ scenarios:
     assert len(label_sets) == 3
     assert len(label_sets) == len(set(label_sets))
     assert secret not in output
+
+
+@pytest.mark.parametrize("location", ["header", "query", "json"])
+@pytest.mark.asyncio
+async def test_environment_secret_is_redacted_from_request_components(
+    tmp_path, monkeypatch, location: str
+) -> None:
+    """Request secrets reach the mock server but stay out of failures."""
+    secret = "PROOFRUN-TEST-REQUEST-COMPONENT-CANARY-67ab"
+    monkeypatch.setenv("PROOFRUN_TEST_SECRET", secret)
+    fields = {
+        "header": (
+            "          headers:"
+            + chr(10)
+            + "            X-API-Key: ${env.PROOFRUN_TEST_SECRET}"
+            + chr(10)
+        ),
+        "query": (
+            "          params:"
+            + chr(10)
+            + "            api_key: ${env.PROOFRUN_TEST_SECRET}"
+            + chr(10)
+        ),
+        "json": (
+            "          json:"
+            + chr(10)
+            + "            api_key: ${env.PROOFRUN_TEST_SECRET}"
+            + chr(10)
+        ),
+    }
+    config_path = tmp_path / "scenario.yaml"
+    config_path.write_text(
+        """version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Request component security test"
+    steps:
+      - name: "Request"
+        request:
+          method: POST
+          path: "/health"
+"""
+        + fields[location]
+        + """        expect:
+          status: 200
+""",
+        encoding="utf-8",
+    )
+    scenario = load_and_compile_config(config_path).scenarios[0]
+    observed_values: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if location == "header":
+            value = request.headers["X-API-Key"]
+        elif location == "query":
+            value = request.url.params["api_key"]
+        else:
+            value = request.content.decode("utf-8")
+        observed_values.append(value)
+        raise httpx.ConnectError(f"Mock failure: {value}", request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await ScenarioRunner(scenario).execute_step(scenario.steps[0], client)
+
+    assert len(observed_values) == 1
+    assert secret in observed_values[0]
+    assert not result.passed
+    assert result.error == "HTTP request failed (ConnectError)"
+    assert secret not in result.error
+
+
+@pytest.mark.asyncio
+async def test_extracted_token_is_not_leaked_from_later_request_error(
+    tmp_path,
+) -> None:
+    """An extracted token must not leak through a later request failure."""
+    access_token = "PROOFRUN-RUNTIME-TOKEN-CANARY-6bb2"
+    config_path = tmp_path / "scenario.yaml"
+    config_path.write_text(
+        """version: "1.0"
+global:
+  base_url: "https://example.com"
+scenarios:
+  - name: "Runtime token security test"
+    steps:
+      - name: "Login"
+        request:
+          method: GET
+          path: "/login"
+        expect:
+          status: 200
+        extract:
+          token: "$.access_token"
+      - name: "Authenticated request"
+        request:
+          method: GET
+          path: "/profile"
+          headers:
+            Authorization: "Bearer ${token}"
+        expect:
+          status: 200
+""",
+        encoding="utf-8",
+    )
+    scenario = load_and_compile_config(config_path).scenarios[0]
+    observed_authorization: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/login":
+            return httpx.Response(200, json={"access_token": access_token})
+        authorization = request.headers["Authorization"]
+        observed_authorization.append(authorization)
+        raise httpx.ConnectError(f"Mock failure: {authorization}", request=request)
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = await ScenarioRunner(scenario).run(client)
+
+    assert observed_authorization == [f"Bearer {access_token}"]
+    assert not result.passed
+    assert result.step_results[1].error == "HTTP request failed (ConnectError)"
+    assert access_token not in repr(result)
