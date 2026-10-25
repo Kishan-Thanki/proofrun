@@ -64,6 +64,7 @@ class WebhookNotifier:
         try:
             response = await self.client.post(
                 self.webhook_url,
+                follow_redirects=False,
                 json=payload,
                 timeout=TIMEOUT_SECONDS,
             )

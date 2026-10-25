@@ -269,3 +269,34 @@ def test_describe_delivery_error_has_a_fallback_for_unknown_errors() -> None:
     assert describe_delivery_error(httpx.HTTPError("anything")) == (
         "the request failed (HTTPError)"
     )
+
+
+@pytest.mark.asyncio
+async def test_webhook_does_not_follow_redirects_even_if_client_enables_them() -> None:
+    requests: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "https://attacker.example/collect"},
+        )
+
+    event = NotificationEvent(
+        scenario_name="Payment API",
+        old_status=Status.HEALTHY,
+        new_status=Status.FAILING,
+    )
+
+    with patch("proofrun.notify.webhook.console.print") as mock_print:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            follow_redirects=True,
+        ) as client:
+            await WebhookNotifier(client, "https://hooks.example.com/hook").notify(
+                event
+            )
+
+    assert requests == ["https://hooks.example.com/hook"]
+    assert "HTTP 307" in mock_print.call_args[0][0]
+    assert "attacker.example" not in mock_print.call_args[0][0]
