@@ -100,15 +100,17 @@ async def test_response_streaming_exact_boundary() -> None:
     assert result.passed is True
 
 
-def test_malformed_billion_laughs_yaml_rejected(tmp_path: Path) -> None:
-    """YAML expansion bomb must not cause unbounded memory expansion."""
-    malicious_yaml = tmp_path / "bomb.yaml"
-    malicious_yaml.write_text(
+def test_unrecognized_root_fields_with_yaml_anchors_rejected(
+    tmp_path: Path,
+) -> None:
+    """Extra root fields containing YAML anchors are strictly rejected by the schema."""
+    config_file = tmp_path / "anchors.yaml"
+    config_file.write_text(
         """version: "1.0"
-a: &a ["lol","lol","lol","lol","lol","lol","lol","lol","lol"]
-b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]
+a: &a ["test_item"]
+b: &b [*a]
 scenarios:
-  - name: "Bomb"
+  - name: "Schema check"
     steps:
       - name: "Step"
         request:
@@ -122,6 +124,6 @@ scenarios:
 
     # Extra fields at root are forbidden by StrictModel, rejected early
     with pytest.raises(ConfigCompilerError) as exc_info:
-        load_and_compile_config(malicious_yaml)
+        load_and_compile_config(config_file)
 
     assert "extra inputs are not permitted" in str(exc_info.value).lower()

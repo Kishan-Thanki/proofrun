@@ -5,6 +5,40 @@ All notable changes to Proofrun are documented here. The format follows
 so a minor release can contain breaking changes; each one is listed under
 **Breaking changes**.
 
+## [0.3.0]
+
+### Breaking changes
+
+- **Remote metrics binding requirement.** The metrics server binds to
+  loopback (`127.0.0.1`) by default. Binding to non-loopback interfaces now
+  strictly requires passing `--allow-remote-metrics`; attempting to bind
+  remotely without this flag raises a usage error.
+
+### Added
+
+- **Runtime secret redaction.** Dynamic variables extracted into `ExecutionContext`
+  (including scalar values inside nested JSON objects or lists) are automatically
+  tracked and redacted (`[REDACTED]`) from step assertion errors and diagnostics.
+- **Dependency vulnerability auditing.** Integrated `pip-audit` into `make check`,
+  CI, and release workflows.
+- **Webhook redirect protection.** Webhook notifications explicitly disable HTTP
+  redirects (`follow_redirects=False`) to avoid token leakage.
+- **Webhook delivery error masking.** Webhook error messages suppress endpoint
+  URLs and tokens, reporting only failure categories.
+- **Response streaming ceiling.** Enforced and tested a strict 10 MiB limit on
+  HTTP response streaming bodies to guard against memory exhaustion.
+- **Adversarial test coverage.** Added tests for deep JSON recursion (150 levels)
+  and streaming boundary conditions.
+
+### Changed
+
+- **Internal error handling.** Unexpected internal exceptions are sanitized as
+  `InternalExecutionError`, suppressing internal runtime details from step outputs.
+- **Container security.** Removed build-time `pip` from the final production
+  container image, running as unprivileged user `UID 10001`.
+- **Supply chain security.** Pinned GitHub Actions by commit SHA and configured
+  Cosign image signing with BuildKit provenance and SBOM attestations.
+
 ## [0.2.0]
 
 ### Added
