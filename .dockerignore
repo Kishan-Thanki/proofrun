@@ -10,4 +10,21 @@ dist
 tests
 docs
 deploy
-FUTURE.md
+roadmap.md
+
+# Local environment and credentials
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.secret
+.pypirc
+.netrc
+.npmrc
+.aws/
+.ssh/
+secrets/
+.secrets/
