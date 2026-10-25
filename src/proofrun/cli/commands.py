@@ -21,6 +21,7 @@ from proofrun.cli.runtime import (
 )
 from proofrun.config.compiler import ConfigCompilerError, load_and_compile_config
 from proofrun.config.provider import ConfigProvider
+from proofrun.redaction import redact_secrets
 
 __all__ = [
     "app",
@@ -105,7 +106,7 @@ def validate_config(config_path: Path) -> int:
 
     for scenario in config.scenarios:
         table.add_row(
-            escape(scenario.name),
+            escape(redact_secrets(scenario.name, scenario._secret_values)),
             str(len(scenario.steps)),
             f"{scenario.interval_seconds}s",
             str(scenario.retries),

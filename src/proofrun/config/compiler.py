@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from proofrun.config.envvars import EnvVarError, resolve_env_references
 from proofrun.config.models import GlobalConfig, ProofrunConfig
+from proofrun.redaction import redact_secrets
 
 _INHERITED_SCENARIO_FIELDS = (
     "interval_seconds",
@@ -31,7 +32,10 @@ class ConfigCompilerError(Exception):
     """Raised when a Proofrun configuration cannot be loaded, validated, or compiled."""
 
 
-def _format_validation_error(err: ValidationError) -> str:
+def _format_validation_error(
+    err: ValidationError,
+    secret_values: set[str] | frozenset[str] = frozenset(),
+) -> str:
     """Describe validation problems without echoing the offending input.
 
     Environment references are resolved before validation, so the input of a
@@ -47,7 +51,8 @@ def _format_validation_error(err: ValidationError) -> str:
         )
     ]
 
-    return "Config validation failed:\n" + "\n".join(lines)
+    message = "Config validation failed:\n" + "\n".join(lines)
+    return redact_secrets(message, secret_values)
 
 
 def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
@@ -90,23 +95,36 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
             f"Invalid format in {path}. Expected a top-level YAML mapping."
         )
 
+    secret_values: set[str] = set()
+
     try:
-        raw_data = resolve_env_references(raw_data, os.environ)
+        raw_data = resolve_env_references(
+            raw_data,
+            os.environ,
+            secret_values=secret_values,
+        )
     except EnvVarError as err:
         raise ConfigCompilerError(f"Invalid configuration in {path}: {err}") from err
+
+    validation_message: str | None = None
 
     try:
         config = ProofrunConfig.model_validate(raw_data)
     except ValidationError as err:
-        raise ConfigCompilerError(_format_validation_error(err)) from err
+        validation_message = _format_validation_error(err, secret_values)
+
+    if validation_message is not None:
+        raise ConfigCompilerError(validation_message)
 
     seen_names: set[str] = set()
 
     for scenario in config.scenarios:
+        scenario._secret_values = frozenset(secret_values)
+
         if scenario.name in seen_names:
+            safe_name = redact_secrets(scenario.name, secret_values)
             raise ConfigCompilerError(
-                f"Duplicate scenario name '{scenario.name}'. "
-                "Scenario names must be unique."
+                f"Duplicate scenario name '{safe_name}'. Scenario names must be unique."
             )
 
         seen_names.add(scenario.name)
@@ -124,8 +142,9 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
 
         if scenario.base_url is None:
             if global_base_url is None:
+                safe_name = redact_secrets(scenario.name, secret_values)
                 raise ConfigCompilerError(
-                    f"Scenario '{scenario.name}' is missing 'base_url' "
+                    f"Scenario '{safe_name}' is missing 'base_url' "
                     "and no global 'base_url' is defined."
                 )
 
@@ -134,9 +153,23 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
         for step in scenario.steps:
             for variable_name in step.extract:
                 if variable_name.startswith("env."):
+                    safe_variable_name = redact_secrets(
+                        variable_name,
+                        secret_values,
+                    )
+                    safe_scenario_name = redact_secrets(
+                        scenario.name,
+                        secret_values,
+                    )
+                    safe_step_name = redact_secrets(
+                        step.name,
+                        secret_values,
+                    )
+
                     raise ConfigCompilerError(
-                        f"Invalid extract variable '{variable_name}' in scenario "
-                        f"'{scenario.name}', step '{step.name}': names starting "
+                        f"Invalid extract variable '{safe_variable_name}' "
+                        f"in scenario '{safe_scenario_name}', "
+                        f"step '{safe_step_name}': names starting "
                         "with 'env.' are reserved for environment references."
                     )
 
@@ -163,26 +196,58 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
                     schema_file = Path(step.expect.schema_data)
 
                 if not schema_file.exists():
+                    safe_schema_path = redact_secrets(
+                        step.expect.schema_data,
+                        secret_values,
+                    )
+                    safe_scenario_name = redact_secrets(scenario.name, secret_values)
+                    safe_step_name = redact_secrets(step.name, secret_values)
+
                     raise ConfigCompilerError(
                         f"JSON Schema file not found: "
-                        f"'{step.expect.schema_data}' "
-                        f"(referenced in scenario '{scenario.name}', "
-                        f"step '{step.name}')"
+                        f"'{safe_schema_path}' "
+                        f"(referenced in scenario '{safe_scenario_name}', "
+                        f"step '{safe_step_name}')"
                     )
 
                 try:
                     with schema_file.open("r", encoding="utf-8") as file:
                         raw_schema = json.load(file)
                 except (OSError, json.JSONDecodeError) as err:
+                    safe_schema_path = redact_secrets(
+                        step.expect.schema_data,
+                        secret_values,
+                    )
+                    safe_scenario_name = redact_secrets(
+                        scenario.name,
+                        secret_values,
+                    )
+                    safe_step_name = redact_secrets(
+                        step.name,
+                        secret_values,
+                    )
+
                     raise ConfigCompilerError(
                         f"Failed to read JSON schema file "
-                        f"'{step.expect.schema_data}': {err}"
-                    ) from err
+                        f"'{safe_schema_path}' "
+                        f"(scenario '{safe_scenario_name}', "
+                        f"step '{safe_step_name}'): "
+                        f"{type(err).__name__}."
+                    ) from None
 
             if not isinstance(raw_schema, dict):
+                safe_scenario_name = redact_secrets(
+                    scenario.name,
+                    secret_values,
+                )
+                safe_step_name = redact_secrets(
+                    step.name,
+                    secret_values,
+                )
+
                 raise ConfigCompilerError(
                     f"JSON Schema must be an object in scenario "
-                    f"'{scenario.name}', step '{step.name}'."
+                    f"'{safe_scenario_name}', step '{safe_step_name}'."
                 )
 
             try:
@@ -192,10 +257,20 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
                     compiled,
                 )
             except Exception as err:
+                safe_scenario_name = redact_secrets(
+                    scenario.name,
+                    secret_values,
+                )
+                safe_step_name = redact_secrets(
+                    step.name,
+                    secret_values,
+                )
+
                 raise ConfigCompilerError(
                     f"Failed to compile JSON schema in "
-                    f"scenario '{scenario.name}', "
-                    f"step '{step.name}': {err}"
-                ) from err
+                    f"scenario '{safe_scenario_name}', "
+                    f"step '{safe_step_name}': "
+                    f"{type(err).__name__}."
+                ) from None
 
     return config

@@ -93,5 +93,6 @@ def print_config_error(error: str, using_last_known_good: bool) -> None:
 def print_internal_error(scenario_name: str, error: BaseException) -> None:
     console.print(
         f"[bold red]Internal error while running "
-        f"'{escape(scenario_name)}':[/bold red] {escape(repr(error))}"
+        f"'{escape(scenario_name)}':[/bold red] "
+        f"{type(error).__name__} (details suppressed)"
     )

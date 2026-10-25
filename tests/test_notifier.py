@@ -139,6 +139,8 @@ async def test_webhook_alert_http_error() -> None:
 async def test_webhook_alert_network_exception() -> None:
     """Verifies network failures are caught and logged."""
 
+    secret = "PROOFRUN-TEST-WEBHOOK-CANARY-8f31"
+
     async def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError(
             "Network unreachable",
@@ -159,7 +161,7 @@ async def test_webhook_alert_network_exception() -> None:
         ) as client:
             notifier = WebhookNotifier(
                 client=client,
-                webhook_url="https://fake.webhook.com",
+                webhook_url=f"https://fake.webhook.com/hooks/{secret}",
             )
 
             await notifier.notify(event)
@@ -171,6 +173,7 @@ async def test_webhook_alert_network_exception() -> None:
         assert "Failed to send webhook alert for 'Payment API'" in call_args
         assert "could not connect to the endpoint" in call_args
         assert "fake.webhook.com" not in call_args
+        assert secret not in call_args
 
 
 @pytest.mark.asyncio

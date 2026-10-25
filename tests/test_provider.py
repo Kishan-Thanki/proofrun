@@ -178,14 +178,14 @@ def test_config_manager_handles_file_access_error(
     with patch.object(
         Path,
         "stat",
-        side_effect=OSError("Permission denied"),
+        side_effect=PermissionError("Permission denied"),
     ):
         cached_config, stat_error = manager.load()
 
     assert cached_config is config
     assert stat_error is not None
     assert isinstance(stat_error, ConfigCompilerError)
-    assert "Permission denied" in str(stat_error)
+    assert "PermissionError" in str(stat_error)
 
 
 def test_unchanged_invalid_configuration_is_not_parsed_again(
@@ -232,3 +232,23 @@ def test_fixing_an_invalid_configuration_recovers(tmp_path: Path) -> None:
 
     assert error is None
     assert config is not None
+
+
+def test_file_access_error_does_not_expose_path_or_exception_details(
+    tmp_path: Path,
+) -> None:
+    """Filesystem errors must not expose sensitive paths or raw error text."""
+    secret = "PROOFRUN-TEST-SECRET-CANARY-PATH-3f8a"
+    config_file = tmp_path / f"{secret}.yaml"
+    manager = ConfigProvider(config_file)
+
+    with patch.object(
+        Path,
+        "stat",
+        side_effect=OSError(f"Permission denied: {secret}"),
+    ):
+        _, error = manager.load()
+
+    assert error is not None
+    assert "Unable to access configuration file" in str(error)
+    assert secret not in str(error)

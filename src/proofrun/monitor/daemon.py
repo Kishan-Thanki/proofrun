@@ -18,6 +18,7 @@ from proofrun.health import StateManager, StateTransition, Status
 from proofrun.metrics.registry import MetricsRegistry
 from proofrun.monitor.scheduler import Scheduler
 from proofrun.notify.base import NotificationEvent, Notifier
+from proofrun.redaction import redact_secrets
 from proofrun.runner.engine import ScenarioResult
 from proofrun.runner.execution import ClientFactory, Sleep, run_scenario
 
@@ -81,6 +82,7 @@ class Daemon:
     async def run(self, stop: asyncio.Event | None = None) -> None:
         """Run until ``stop`` is set, or until the task is cancelled."""
         running: dict[str, asyncio.Task[None]] = {}
+        running_secrets: dict[str, frozenset[str]] = {}
         last_error: str | None = None
 
         try:
@@ -113,7 +115,9 @@ class Daemon:
                 }
 
                 for name in self.scheduler.due(intervals, running.keys(), now):
-                    running[name] = asyncio.create_task(self._execute(scenarios[name]))
+                    scenario = scenarios[name]
+                    running[name] = asyncio.create_task(self._execute(scenario))
+                    running_secrets[name] = scenario._secret_values
 
                 delay = self.scheduler.seconds_until_next(now, running.keys())
                 timeout = self.max_tick if delay is None else min(delay, self.max_tick)
@@ -127,7 +131,7 @@ class Daemon:
                 else:
                     await asyncio.sleep(timeout)
 
-                self._reap(running)
+                self._reap(running, running_secrets)
         finally:
             for task in running.values():
                 task.cancel()
@@ -135,13 +139,22 @@ class Daemon:
             if running:
                 await asyncio.gather(*running.values(), return_exceptions=True)
 
-    def _reap(self, running: dict[str, asyncio.Task[None]]) -> None:
-        """Forget finished tasks and report any that failed unexpectedly."""
+    def _reap(
+        self,
+        running: dict[str, asyncio.Task[None]],
+        running_secrets: dict[str, frozenset[str]],
+    ) -> None:
+        """Forget finished tasks and report unexpected failures safely."""
         for name in [name for name, task in running.items() if task.done()]:
             error = running.pop(name).exception()
+            secret_values = running_secrets.pop(name, frozenset())
 
             if error is not None and self.on_internal_error is not None:
-                self.on_internal_error(name, error)
+                safe_name = redact_secrets(name, secret_values)
+                safe_error = RuntimeError(
+                    f"Scenario task failed ({type(error).__name__}); details suppressed"
+                )
+                self.on_internal_error(safe_name, safe_error)
 
     async def _execute(self, scenario: ScenarioConfig) -> None:
         """Run one scenario and record the outcome."""
@@ -160,18 +173,20 @@ class Daemon:
                 result.passed,
                 result.total_latency_ms / 1000,
                 self.wall_clock(),
+                secret_values=scenario._secret_values,
             )
             self.metrics.set_health(scenario.name, transition.new_status)
 
         if self.on_result is not None:
             self.on_result(result)
 
-        await self._notify(transition, result)
+        await self._notify(transition, result, scenario._secret_values)
 
     async def _notify(
         self,
         transition: StateTransition,
         result: ScenarioResult,
+        secret_values: frozenset[str],
     ) -> None:
         """Send an alert when the scenario started failing or recovered."""
         if self.notifier is None or not transition.changed:
@@ -194,9 +209,12 @@ class Daemon:
 
         await self.notifier.notify(
             NotificationEvent(
-                scenario_name=transition.scenario_name,
+                scenario_name=redact_secrets(
+                    transition.scenario_name,
+                    secret_values,
+                ),
                 old_status=transition.old_status,
                 new_status=transition.new_status,
-                details=details,
+                details=redact_secrets(details, secret_values),
             )
         )
