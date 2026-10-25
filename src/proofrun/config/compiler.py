@@ -71,7 +71,7 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
     path = Path(config_path).resolve()
 
     if not path.exists():
-        raise ConfigCompilerError(f"Configuration file not found: {path}")
+        raise ConfigCompilerError("Configuration file not found.")
 
     try:
         with path.open("r", encoding="utf-8") as file:
@@ -83,11 +83,11 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
             if mark is not None
             else ""
         )
-        raise ConfigCompilerError(f"Invalid YAML syntax in {path}{location}.") from None
+        raise ConfigCompilerError(f"Invalid YAML syntax{location}.") from None
+
     except OSError as err:
-        reason = err.strerror or "I/O error"
         raise ConfigCompilerError(
-            f"Failed to read configuration file {path}: {reason}."
+            f"Failed to read configuration file ({type(err).__name__})."
         ) from None
 
     if not isinstance(raw_data, dict):
@@ -104,7 +104,7 @@ def load_and_compile_config(config_path: str | Path) -> ProofrunConfig:
             secret_values=secret_values,
         )
     except EnvVarError as err:
-        raise ConfigCompilerError(f"Invalid configuration in {path}: {err}") from err
+        raise ConfigCompilerError(f"Invalid configuration: {err}") from None
 
     validation_message: str | None = None
 
