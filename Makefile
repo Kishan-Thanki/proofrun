@@ -34,7 +34,10 @@ format-check:
 typecheck:
 	uv run pyright
 
-check: lint format-check typecheck coverage
+audit:
+	uv run pip-audit
+
+check: lint format-check typecheck audit coverage
 
 serve:
 	$(PYTHON) scenarios/server.py
